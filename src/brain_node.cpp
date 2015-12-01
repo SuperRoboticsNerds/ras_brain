@@ -36,7 +36,7 @@
 #include "message_filters/subscriber.h"
 
 #define ROT_DURATION  0.2
-#define FORWARD_DURATION  1.0
+#define FORWARD_DURATION  0.4
 
 
 class BrainNode
@@ -116,14 +116,16 @@ void get_next_path(){
 }
 
 void check_at_correct_place(){
-    std::cout << "-----------correct 1 -----------"<< std::endl;
-    for(int i = -5; i == 5;i++){
-        std::cout << "-----------correct k:i -----------"<< std::endl;
-            if(((robot_x+i)==newx) && ((robot_y+i)==newy)){
+    //std::cout << "-----------correct 1 -----------"<< std::endl;
+    for(int i = -5; i <= 5;i++){
+        for(int j = -10; j <= 10;j++){
+        //std::cout << "-----------correct k:i -----------"<< std::endl;
+            if((floor(robot_x)==floor(newx+i)) && (floor(robot_y)==floor(newy+j))){
                 std::cout << "-----------check ************************** -----------"<< std::endl;
                 get_next_path();
 
             }
+        }
     }
 
 }
@@ -136,72 +138,133 @@ void move_function(){
     //while not close
     std::cout << "inside"<< std::endl;
     double alpha = atan2(newy-robot_y,newx-robot_x);
-    if((std::abs(alpha-robot_theta) > 0.2) || (std::abs(2*M_PI-robot_theta+alpha) > 0.2)){
-        if(std::abs(alpha-robot_theta) < std::abs(2*M_PI-robot_theta+alpha)){
-            rotate(alpha-robot_theta);
-        }
-        else{
-            rotate(2*M_PI-robot_theta+alpha);
-        }
-    }
-    std::cout << "-----------middle -----------"<< std::endl;
-    //ros::spinOnce();
     double dist_to_goal = std::sqrt((newx-robot_x)*(newx-robot_x) + (newy-robot_y)*(newy-robot_y));
-    if (dist_to_goal>20){
-        go_forward(std::max(0.2,dist_to_goal));
-    }
-    std::cout << "-----------middle 2-----------"<< std::endl;
+    double beta = (robot_theta-alpha);
+    double beta_2 = (alpha-robot_theta);
+    // if(robot_theta >=0){
+        if(beta>M_PI){        
+            //Turn left
+            std::cout << "---Turn left > PI----   Beta:"<< beta<< std::endl;
+            rotate_2(1);
+        }else if(beta>0.18){
+            //Turn right
+            std::cout << "---Turn right > 0.18----   Beta:"<< beta <<  std::endl;
+            rotate_2(2);
+        }else if(beta <(-M_PI)){
+        // turn right
+            std::cout << "---Turn right < (-PI)----   Beta:"<< beta <<  std::endl;
+        rotate_2(2);
+        }else if(beta < (-0.18)){
+            //turn left
+            std::cout << "---Turn left > 0.18----   Beta:"<< beta <<  std::endl;
+            rotate_2(1);
+        }else if(dist_to_goal>5){
+            go_forward(std::max(20.0,dist_to_goal));
+        }
+//     }
+//     else if(robot_theta<0){
+   
+// //if((std::abs(alpha-robot_theta) > 0.26) || (std::abs(2*M_PI-(alpha-robot_theta)) > 0.26)){
+//         if(beta>0.18){
+//             //Turn left
+//             rotate_2(1);
+//         }else if(beta < (-0.18)){
+//             //turn left
+//             rotate_2(2);
+//         }else if(dist_to_goal>5){
+//             go_forward(std::max(20.0,dist_to_goal));
+//         }
+//      }
+    //if(((alpha-robot_theta) > 0.26) || ((alpha-robot_theta) < -0.26)){
+    //    std::cout << "alpha:"<<alpha << ", theta:"<<robot_theta <<", ANGLE left: "<<(alpha-robot_theta)<< ", right: "<<  2*M_PI-(alpha-robot_theta) << std::endl;
+    //    if(std::abs(alpha-robot_theta) > std::abs(2*M_PI-robot_theta+alpha)){
+    //        //rotate(alpha-robot_theta);
+    //    }
+    //    else{
+    //        //rotate(2*M_PI-robot_theta+alpha);
+    //    }
+    //}
+    //else if (dist_to_goal>5){
+        //go_forward(std::max(50.0,dist_to_goal));
+    //}
+    //std::cout << "-----------middle -----------"<< std::endl;
+    //ros::spinOnce();
+    //std::cout << "-----------middle 2-----------"<< std::endl;
     /*
     if(object_seen){
         move_to_object();
     }*/
     check_at_correct_place();
-    std::cout << "-----------end -----------"<< std::endl;
+    //std::cout << "-----------end -----------"<< std::endl;
 }
 
 void move_to_object(){
 
-    rotate(angle_to_object);
+    //rotate(angle_to_object);
 
     //perhaps move a little close
 
     //ask for determination - 
-
-
-
-
 }
 
-void rotate(double angle){
+void rotate_2(int turn_direction){
     geometry_msgs::Twist twist_msg;
     twist_msg.linear.x = 0.0;
-    if (angle<0.1){
-    twist_msg.angular.z = -3.0;}
-    else if (angle>0.1){
+    if (turn_direction==2){
+    twist_msg.angular.z = -3.0;
+    //negativt är höger
+    }
+    else if (turn_direction==1){
         twist_msg.angular.z = 3.0;
+        //vänster
     }
     else{
         twist_msg.angular.z = 0.0;
     }
+    std::cout << "Turns: linear x: "<< twist_msg.linear.x << ", angular z: "<<twist_msg.angular.z<< std::endl;
     double start_time =ros::Time::now().toSec();
     while (ros::Time::now().toSec()-start_time<ROT_DURATION){
-    twist_pub.publish(twist_msg);
-}
+        twist_pub.publish(twist_msg);
+    }
 
     twist_msg.angular.z = 0.0;
     twist_pub.publish(twist_msg);
 }
+
+
+// void rotate(double angle){
+//     geometry_msgs::Twist twist_msg;
+//     twist_msg.linear.x = 0.0;
+//     if (angle<0.1){
+//     twist_msg.angular.z = -3.0;}
+//     else if (angle>0.1){
+//         twist_msg.angular.z = 3.0;
+//     }
+//     else{
+//         twist_msg.angular.z = 0.0;
+//     }
+//     std::cout << "Turns: linear x: "<< twist_msg.linear.x << ", angular z: "<<twist_msg.angular.z<< std::endl;
+//     // double start_time =ros::Time::now().toSec();
+//     // while (ros::Time::now().toSec()-start_time<ROT_DURATION){
+//     twist_pub.publish(twist_msg);
+// // }
+
+//     // twist_msg.angular.z = 0.0;
+//     //twist_pub.publish(twist_msg);
+// }
 
 void go_forward(double distance){
     geometry_msgs::Twist twist_msg;
     twist_msg.linear.x = 0.4;
     twist_msg.angular.z = 0.0;
+    std::cout << "Forward: linear x: "<< twist_msg.linear.x << ", angular z: "<<twist_msg.angular.z<< std::endl;
+    
     double start_time =ros::Time::now().toSec();
     while (ros::Time::now().toSec()-start_time<FORWARD_DURATION){
     twist_pub.publish(twist_msg);
-}
+     }
 
-    twist_msg.linear.x = 0.0;
+     twist_msg.linear.x = 0.0;
     twist_pub.publish(twist_msg);
 
 }
@@ -385,9 +448,9 @@ int main(int argc, char **argv)
     {   
         if(brain_node.got_path==true){
            //brain_node.go_forward(10);
-            std::cout << "-----------here 1 -----------"<< std::endl;
+           // std::cout << "-----------here 1 -----------"<< std::endl;
            brain_node.get_next_path();
-           std::cout << "------------Here 2-------------"<< std::endl;
+           //std::cout << "------------Here 2-------------"<< std::endl;
            got_path_game=1;
         }
 
@@ -395,9 +458,9 @@ int main(int argc, char **argv)
   
 
         if((brain_node.pos_received_func() == 1)&&(got_path_game==1)){
-            std::cout << "-----------here 5 -----------"<< std::endl;
+            //std::cout << "-----------here 5 -----------"<< std::endl;
             brain_node.move_function();
-            std::cout << "-----------here 6 -----------"<< std::endl;
+            //std::cout << "-----------here 6 -----------"<< std::endl;
         }
 
 

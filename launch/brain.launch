@@ -11,8 +11,6 @@
 
 <node name="exploration_node" pkg="exploration" type="exploration" />
  
-<node name="grid_generator_node" pkg="grid_generator" type="grid_generator_node" />
-
 
 
 <node name="distance_converter" pkg="localization" type="distance_converter"/>
