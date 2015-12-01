@@ -1,6 +1,10 @@
 <launch>
 
 
+<node name="map_reader" pkg="localization" type="map_reader.py"/>
+
+<node name="motor_controller" pkg="motors" type="fixed_motor_controller" />
+
 <node name="motor_controller" pkg="motors" type="fixed_motor_controller" />
 
 <node name="exploration" pkg="exploration" type="node_generator" />
