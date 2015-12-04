@@ -147,6 +147,7 @@ void move_function(){
             std::cout << "---Turn left > PI----   Beta:"<< beta<< std::endl;
             rotate_2(1);
         }else if(beta>0.10){
+
             //Turn right
             std::cout << "---Turn right > 0.15----   Beta:"<< beta <<  std::endl;
             rotate_2(2);
@@ -155,12 +156,14 @@ void move_function(){
             std::cout << "---Turn right < (-PI)----   Beta:"<< beta <<  std::endl;
         rotate_2(2);
         }else if(beta < (-0.10)){
+
             //turn left
             std::cout << "---Turn left > 0.15----   Beta:"<< beta <<  std::endl;
             rotate_2(1);
         }else if(dist_to_goal>0.005){
             //go_forward(std::max(0.4,dist_to_goal));
             go_forward(dist_to_goal);
+
              std::cout << "go forward"<< std::endl;
         }
 //     }
@@ -244,6 +247,7 @@ void rotate_2(int turn_direction){
         }else if(beta>(-0.1)){
             twist_msg.angular.z = 1.7;
         }
+
         //vänster
     }
     else{
@@ -252,6 +256,7 @@ void rotate_2(int turn_direction){
     //std::cout << "Turns: linear x: "<< twist_msg.linear.x << ", angular z: "<<twist_msg.angular.z<< std::endl;
     //double start_time =ros::Time::now().toSec();
     //while (ros::Time::now().toSec()-start_time<ROT_DURATION){
+
         twist_pub.publish(twist_msg);
     //}
 
