@@ -118,7 +118,7 @@ public:
         //The rows and cols needs to be one bigger than the length of the outer walls
         //grid_cost_map_pub = n.advertise<std::vector< std::vector<struct position_node> >("test",1);
         path_sub = n.subscribe<nav_msgs::GridCells>( "/nodes_generator/path", 1,&BrainNode::path_vector_function,this);
-        object_pos_sub_ = n.subscribe<ras_msgs::Object_id>("/objects/object",1,&BrainNode::object_detected_function,this);
+        object_pos_sub_ = n.subscribe<ras_msgs::Object_id>("/object/object",1,&BrainNode::object_detected_function,this);
         robot_pos_sub_ = n.subscribe<localization::Position>("/position",1,&BrainNode::localization_callback,this);
         odom_sub = n.subscribe<motors::odometry>("/odometry",10,&BrainNode::odom_callback,this);
 
@@ -308,8 +308,8 @@ void rotate(){
     double error_rot;
 
     double Kp_rot = 4.0;
-    double Ki_rot = 0.1; 
-    double Kd_rot = 0.0;
+    double Ki_rot = 0.3; 
+    double Kd_rot = 0.00;
 
     double proportional_rot=0.0;
     double integral_rot=0.0;
@@ -320,7 +320,7 @@ void rotate(){
     //PID controller to turn
     proportional_rot = error_rot;
     integral_rot = integral_rot_Old + dt*error_rot;
-    derivative_rot = 0.0;//(error_rot - errorOld_rot)/dt;
+    derivative_rot = (error_rot - errorOld_rot)/dt;
 
     //Anti windup:
     if(std::fabs(integral_rot)>4.0){
@@ -645,7 +645,12 @@ int main(int argc, char **argv)
             {
                 brain_node.got_path = false;
                 // Ask for new path
-            }   
+            }  
+
+            if(object_seen)
+            {
+                
+            } 
         }
 
 
