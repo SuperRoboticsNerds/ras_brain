@@ -37,3 +37,8 @@ target_link_libraries(brain_node  ${catkin_LIBRARIES})
 
 add_dependencies(brain_node  brain_msgs_generate_messages_cpp)
 
+add_executable(brain_node_temp src/brain_node_temp.cpp)
+target_link_libraries(brain_node_temp  ${catkin_LIBRARIES})
+
+add_dependencies(brain_node_temp  brain_temp_msgs_generate_messages_cpp)
+

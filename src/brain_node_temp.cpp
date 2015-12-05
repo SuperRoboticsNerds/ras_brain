@@ -13,7 +13,7 @@
 #include "std_msgs/Float64.h"
 #include "std_msgs/Float32MultiArray.h"
 #include "nav_msgs/OccupancyGrid.h"
-#include "nav_msgs/Odometry.h"
+#include "motors/odometry.h"
 #include "nav_msgs/GridCells.h"
 #include "ras_arduino_msgs/PWM.h"
 #include "ras_arduino_msgs/Encoders.h"
@@ -35,18 +35,36 @@
 #include "message_filters/subscriber.h"
 
 //#define ROT_DURATION  0.2
-//#define FORWARD_DURATION  0.3
+#define FORWARD_DURATION  0.3
+
+
+const int times_to_save = 50;
 
 //Memory for PID controller for rotation 
-//double errorOld_rot=0.0;
-//double integral_rot_Old=0.0;
+double errorOld_rot=0.0;
+double integral_rot_Old=0.0;
 
 //Memory for PID controller for going forward
-//double errorOld_lin=0.0;
-//double integral_lin_Old=0.0;
+double errorOld_lin=0.0;
+double integral_lin_Old=0.0;
+double alpha;
+double lastTime;
 
 bool final_node = false;
 
+bool flag_forward=false;
+bool flag_rotation=false;
+
+struct timestamp{
+    double time;
+    double delta_trans;
+    double delta_rot;
+};
+
+
+double sign(double val) {
+    return double((0.0 < val) - (val < 0.0));
+}
 
 
 class BrainNode
@@ -56,6 +74,7 @@ public:
     std::vector< std::vector<grid_generator::Grid_map_struct> > matrix_a;
     std::vector<grid_generator::Grid_map_struct> grid_map_send;
     std::vector<geometry_msgs::Point> paths;
+    std::vector<timestamp> timestamp_vec;
 
     std_msgs::Float32MultiArray vec_data;
 
@@ -79,6 +98,7 @@ public:
     ros::Subscriber object_pos_sub_;
     ros::Subscriber robot_pos_sub_;
     ros::Subscriber path_sub;
+    ros::Subscriber odom_sub;
 
     ros::Publisher marker_object_pub;
     ros::Publisher object_pos_pub;
@@ -93,11 +113,15 @@ public:
         pos_received = false;
         path_node_index =0;
 
+        fill_timestamps();
+
         //The rows and cols needs to be one bigger than the length of the outer walls
         //grid_cost_map_pub = n.advertise<std::vector< std::vector<struct position_node> >("test",1);
         path_sub = n.subscribe<nav_msgs::GridCells>( "/nodes_generator/path", 1,&BrainNode::path_vector_function,this);
         object_pos_sub_ = n.subscribe<ras_msgs::Object_id>("/objects/object",1,&BrainNode::object_detected_function,this);
-        robot_pos_sub_ = n.subscribe<localization::Position>("/position",100,&BrainNode::current_robot_position_function,this);
+        robot_pos_sub_ = n.subscribe<localization::Position>("/position",1,&BrainNode::localization_callback,this);
+        odom_sub = n.subscribe<motors::odometry>("/odometry",10,&BrainNode::odom_callback,this);
+
 
         
         requst_pub_ = n.advertise<std_msgs::Int32>("/grid_generator/update_query", 100);
@@ -121,6 +145,33 @@ void path_vector_function(nav_msgs::GridCells msg)
         got_path=true;
 }
 
+void odom_callback(motors::odometry msg){
+
+    struct timestamp ts1;
+    ts1.time = ros::Time::now().toSec();
+    ts1.delta_trans = msg.v*msg.dt;
+    ts1.delta_rot = msg.w*msg.dt;
+
+    timestamp_vec.push_back(ts1);
+    timestamp_vec.erase(timestamp_vec.begin()); //TODO: does this really work??
+
+    robot_theta += msg.w*msg.dt;
+    robot_x += msg.v*msg.dt*cos(robot_theta);
+    robot_y += msg.v*msg.dt*sin(robot_theta);
+
+    //publish_position();
+}
+
+void fill_timestamps(){
+    for (int i=0;i<times_to_save;i++){
+        struct timestamp ts;
+        ts.time = ros::Time::now().toSec();
+        ts.delta_rot = 0.0;
+        ts.delta_trans = 0.0;
+        timestamp_vec.push_back(ts);
+    }
+}
+
 void get_next_path()
 {
     path_node_index++;
@@ -136,112 +187,102 @@ void get_next_path()
 
 bool check_at_correct_place()
 {
-    double threshold = 0.1;
-    for(int i = -5; i <= 5;i++)
-    {
-        for(int j = -5; j <= 5;j++)
-        {
-            if((floor(robot_x) == floor(newx+(i/100))) && (floor(robot_y)==floor(newy+(j/100))))
-            {
-                get_next_path();
-            }
-        }
-    }
+    double threshold = 0.05;
+    // for(int i = -5; i <= 5;i++)
+    // {
+    //     for(int j = -5; j <= 5;j++)
+    //     {
+    //         if((floor(robot_x) == floor(newx+(i/100))) && (floor(robot_y)==floor(newy+(j/100))))
+    //         {
+    //             get_next_path();
+    //         }
+    //     }
+    // }
 
     // std::cout << "robot: x= " << robot_x << "  y = " << robot_y << std::endl;
     // std::cout << "nó: x= " << newx << "  y = " << newy << std::endl;
-    //std::cout << "ABS diff: x= " << fabs(robot_x - newx) << "  y = " << fabs(robot_y - newy) << std::endl;
+    // std::cout << "ABS diff: x= " << fabs(robot_x - newx) << "  y = " << fabs(robot_y - newy) << std::endl;
 
 
-    //if((fabs(robot_x - newx) < threshold) && (fabs(robot_y - newy) < threshold))  return true;
-    //else return false;
+    if((fabs(robot_x - newx) < threshold) && (fabs(robot_y - newy) < threshold))  return true;
+    else return false;
 
 
 }
 
 void move_function()
 {
-    double alpha = atan2(newy-robot_y,newx-robot_x);
+    alpha = atan2(newy-robot_y,newx-robot_x);
     double dist_to_goal = std::sqrt((newx-robot_x)*(newx-robot_x) + (newy-robot_y)*(newy-robot_y));
-    beta = (robot_theta-alpha);
-    double beta_2 = (alpha-robot_theta);
+    double theta_temp = robot_theta;
+    //beta = (robot_theta-alpha);
+    // if(std::fabs(beta)>=M_PI){
+    //     beta=2*M_PI-beta;
+    // }
 
-    double threshold = 0.10;
 
 
-    if(beta>M_PI)
-    {        
-        //Turn left
-         std::cout << "Turn left ---- Beta > PI:                        "<< beta<< std::endl;
-        rotate(1);
-    }else if(beta>threshold)
-    {
-        //Turn right
-         std::cout << "Turn right ---- Beta > "<< threshold <<":        "<< beta <<  std::endl;
-        rotate(2);
-    }else if(beta <(-M_PI))
-    {
-    // turn right
-         std::cout << "Turn right ---- Beta < PI:                       "<< beta <<  std::endl;
-        rotate(2);
-    }else if(beta < (-threshold))
-    {
-        //turn left
-         std::cout << "Turn left ---- Beta < "<< -1*threshold <<":         "<< beta <<  std::endl;
-        rotate(1);
-    }else if(dist_to_goal>0.005){
-        //go_forward(std::max(0.4,dist_to_goal));
-        go_forward(dist_to_goal);
-        std::cout << "go forward:                                       "<< beta<< std::endl;
+    //if(theta_temp < 0) theta_temp = 2*M_PI + theta_temp;
+    //if(alpha < 0) alpha = 2*M_PI + alpha;
+    if(std::fabs(alpha-robot_theta) < std::fabs(-2.0*M_PI + alpha - robot_theta)){
+        if (std::fabs(alpha-robot_theta) < std::fabs(2.0*M_PI + alpha - robot_theta)){
+        beta = alpha-robot_theta;
+        }
+        else{
+            beta = 2.0*M_PI + alpha - robot_theta;
+        }
+    }
+    else{
+        beta = -2.0*M_PI + alpha - robot_theta;
     }
 
-    //std::cout << "Beta:         "<< beta <<  std::endl;
-    //std::cout << "ABS(Beta):    "<< fabs(beta) <<  std::endl;
+    //beta = -(alpha-theta_temp);
 
-    // if (fabs(beta)>threshold) rotate(1);    // Stops and aligns 
-    // else    go_forward(dist_to_goal);       // Go forward with small corrections on the angle       
+    //beta_2 = (robot_theta-alpha);
+    double threshold = 0.3;
+
+
+
+    // std::cout << "Beta:"<< beta <<  std::endl;
+    // std::cout << "ABS(Beta):"<< fabs(beta) <<  std::endl;
+
+
+    if (fabs(beta)>threshold)
+    {
+        if(flag_forward)
+        {
+            errorOld_rot=0.0;
+            integral_rot_Old=0.0;
+            errorOld_lin=0.0;
+            integral_lin_Old=0.0;
+            flag_forward=false;
+            std::cout << "flag_forward:" <<  std::endl;
+        } 
+        rotate();    // Stops and aligns 
+        flag_rotation = true;
+    } 
+    else
+    {
+        if(flag_rotation)
+        {
+            errorOld_rot=0.0;
+            integral_rot_Old=0.0;
+            errorOld_lin=0.0;
+            integral_lin_Old=0.0;
+            flag_rotation = false;
+            std::cout << "flag_rotate:"<<  std::endl;
+            stop_robot_and_wait(3);
+        }
+        go_forward(dist_to_goal);  
+        flag_forward = true;
+        //lastTime = ros::Time::now().toSec();
+    }     // Go forward with small corrections on the angle       
 
 
 
 
 }
 
-
-    //     }
-    //     else if(robot_theta<0){
-       
-    // //if((std::abs(alpha-robot_theta) > 0.26) || (std::abs(2*M_PI-(alpha-robot_theta)) > 0.26)){
-    //         if(beta>0.18){
-    //             //Turn left
-    //             rotate_2(1);
-    //         }else if(beta < (-0.18)){
-    //             //turn left
-    //             rotate_2(2);
-    //         }else if(dist_to_goal>5){
-    //             go_forward(std::max(20.0,dist_to_goal));
-    //         }
-    //      }
-    //if(((alpha-robot_theta) > 0.26) || ((alpha-robot_theta) < -0.26)){
-    //    std::cout << "alpha:"<<alpha << ", theta:"<<robot_theta <<", ANGLE left: "<<(alpha-robot_theta)<< ", right: "<<  2*M_PI-(alpha-robot_theta) << std::endl;
-    //    if(std::abs(alpha-robot_theta) > std::abs(2*M_PI-robot_theta+alpha)){
-    //        //rotate(alpha-robot_theta);
-    //    }
-    //    else{
-    //        //rotate(2*M_PI-robot_theta+alpha);
-    //    }
-    //}
-    //else if (dist_to_goal>5){
-        //go_forward(std::max(50.0,dist_to_goal));
-    //}
-    //std::cout << "-----------middle -----------"<< std::endl;
-    //ros::spinOnce();
-    //std::cout << "-----------middle 2-----------"<< std::endl;
-    /*
-    if(object_seen){
-        move_to_object();
-    }*/
-    
-    //std::cout << "-----------end -----------"<< std::endl;
 
 
 void move_to_object()
@@ -255,221 +296,130 @@ void move_to_object()
     //ask for determination - 
 }
 
-void rotate(int turn_direction){
+void rotate(){
+
+
+    double now = ros::Time::now().toSec();
+    double dt = now - lastTime;
+    lastTime = now;
+
     geometry_msgs::Twist twist_msg;
 
-   //  double error_rot;
+    double error_rot;
 
-   //  double Kp_rot = 2.5;
-   //  double Kd_rot = 0.5;
-   //  double Ki_rot = 0.08;
+    double Kp_rot = 4.0;
+    double Ki_rot = 0.1; 
+    double Kd_rot = 0.0;
 
-   //  double proportional_rot=0.0;
-   //  double integral_rot=0.0;
-   //  double derivative_rot=0.0;
+    double proportional_rot=0.0;
+    double integral_rot=0.0;
+    double derivative_rot=0.0;
 
-   //  error_rot = -beta;
+    error_rot = beta;
 
-   //  //PID controller to turn
-   //  proportional_rot = Kp_rot*error_rot;
-   //  integral_rot = integral_rot_Old + Ki_rot*error_rot;
-   //  derivative_rot = Kd_rot*(error_rot - errorOld_rot);
+    //PID controller to turn
+    proportional_rot = error_rot;
+    integral_rot = integral_rot_Old + dt*error_rot;
+    derivative_rot = 0.0;//(error_rot - errorOld_rot)/dt;
 
-   //  twist_msg.linear.x = 0.0;
-   //  twist_msg.angular.z = proportional_rot + integral_rot + derivative_rot;
-   //  if(twist_msg.angular.z > 4.0) twist_msg.angular.z = 4.0;
-   //  if(twist_msg.angular.z < -4.0) twist_msg.angular.z = -4.0;
-
-   // if(twist_msg.angular.z > 0.0) std::cout << "TURNING LEFT...."<< std::endl;
-   // if(twist_msg.angular.z < 0.0) std::cout << "TURNING RIGHT..."<< std::endl;
-
-   //  errorOld_rot = error_rot;
-   //  integral_rot_Old = integral_rot;
-
-   //  twist_pub.publish(twist_msg);
-
-
-    if (turn_direction==2)
-    {
-
-        if(beta>(2.5)){
-            twist_msg.angular.z = -2.5;
-        }else if(beta>(2.0)){
-            twist_msg.angular.z = -2.3;
-        }else if(beta>(1.5)){
-            twist_msg.angular.z = -2.1;
-        }else if(beta>(1.0)){
-            twist_msg.angular.z = -1.9;
-        }else if(beta>(0.8)){
-            twist_msg.angular.z = -1.8;
-        }else if(beta>(0.7)){
-            twist_msg.angular.z = -1.7;
-        }else if(beta>(0.6)){
-            twist_msg.angular.z = -1.6;
-        }else if(beta>(0.5)){
-            twist_msg.angular.z = -1.5;
-        }else if(beta>(0.4)){
-            twist_msg.angular.z = -1.4;
-        }else if(beta>(0.3)){
-            twist_msg.angular.z = -1.35;
-        }else if(beta>(0.25)){
-            twist_msg.angular.z = -1.3;
-        }else if(beta>(0.2)){
-            twist_msg.angular.z = -1.25;
-        }else if(beta>(0.15)){
-            twist_msg.angular.z = -1.2;
-        }else if(beta>(0.1)){
-            twist_msg.angular.z = -1.15;
-        }
-            //negativt är höger
-    }
-    else if (turn_direction==1)
-    {
-
-        if(beta<(-2.5)){
-            twist_msg.angular.z = 2.5;
-        }else if(beta<(-2.0)){
-            twist_msg.angular.z = 2.3;
-        }else if(beta<(-1.5)){
-            twist_msg.angular.z = 2.1;
-        }else if(beta<(-1.0)){
-            twist_msg.angular.z = 1.9;
-        }else if(beta<(-0.8)){
-            twist_msg.angular.z = 1.8;
-        }else if(beta<(-0.7)){
-            twist_msg.angular.z = 1.7;
-        }else if(beta<(-0.6)){
-            twist_msg.angular.z = 1.6;
-        }else if(beta<(-0.5)){
-            twist_msg.angular.z = 1.5;
-        }else if(beta<(-0.4)){
-            twist_msg.angular.z = 1.4;
-        }else if(beta<(-0.3)){
-            twist_msg.angular.z = 1.35;
-        }else if(beta<(-0.25)){
-            twist_msg.angular.z = 1.3;
-        }else if(beta<(-0.2)){
-            twist_msg.angular.z = 1.25;
-        }else if(beta<(-0.15)){
-            twist_msg.angular.z = 1.2;
-        }else if(beta<(-0.1)){
-            twist_msg.angular.z = 1.15;
-        }
-
-        //vänster
-    }
-    else{
-        twist_msg.angular.z = 0.0;
+    //Anti windup:
+    if(std::fabs(integral_rot)>4.0){
+        integral_rot = sign(integral_rot)*5.0;
     }
 
-
-    //std::cout << "Turns: linear x: "<< twist_msg.linear.x << ", angular z: "<<twist_msg.angular.z<< std::endl;
-    //double start_time =ros::Time::now().toSec();
-    //while (ros::Time::now().toSec()-start_time<ROT_DURATION){
-
-        
-    //}
-    std::cout << "Twist linear x: "<< twist_msg.linear.x << std::endl;
-    std::cout << "Twist angular z: "<< twist_msg.angular.z << std::endl;
     twist_msg.linear.x = 0.0;
+    twist_msg.angular.z = Kp_rot*proportional_rot + Ki_rot*integral_rot + Kd_rot*derivative_rot;
+    if(twist_msg.angular.z > 3.0) twist_msg.angular.z = 3.0;
+    if(twist_msg.angular.z < -3.0) twist_msg.angular.z = -3.0;
+
+   if(twist_msg.angular.z > 0.0) std::cout << "TURNING LEFT....  beta: "<< beta << ", alpha: "<< alpha << ", theta: " << robot_theta << std::endl;
+   if(twist_msg.angular.z < 0.0) std::cout << "TURNING RIGHT...  beta: "<< beta << ", alpha: "<< alpha << ", theta: " << robot_theta << std::endl;
+    // std::cout << "integral " << integral_rot  << std::endl;
+
+    errorOld_rot = error_rot;
+    integral_rot_Old = integral_rot;
+
     twist_pub.publish(twist_msg);
+
+
 }
 
 
-// void rotate(double angle){
-//     geometry_msgs::Twist twist_msg;
-//     twist_msg.linear.x = 0.0;
-//     if (angle<0.1){
-//     twist_msg.angular.z = -3.0;}
-//     else if (angle>0.1){
-//         twist_msg.angular.z = 3.0;
-//     }
-//     else{
-//         twist_msg.angular.z = 0.0;
-//     }
-//     std::cout << "Turns: linear x: "<< twist_msg.linear.x << ", angular z: "<<twist_msg.angular.z<< std::endl;
-//     // double start_time =ros::Time::now().toSec();
-//     // while (ros::Time::now().toSec()-start_time<ROT_DURATION){
-  //   twist_pub.publish(twist_msg);
-// // }
 
-//     // twist_msg.angular.z = 0.0;
-//     //twist_pub.publish(twist_msg);
-// }
 
 void go_forward(double distance)
 {
     geometry_msgs::Twist twist_msg;
+    double now = ros::Time::now().toSec();
+    double dt = now - lastTime;
+    lastTime = now;
 
-    // double error_lin;
-    // double error_rot;
+    double error_lin;
+    double error_rot;
 
-    // double Kp_l = 1.0;
-    // double Kd_l = 0.08;
-    // double Ki_l = 0.05;
-    // double Kp_rot = 3.9;
-    // double Kd_rot = 0.7;
-    // double Ki_rot = 0.08;
+    double Kp_l = 1.0;
+    double Kd_l = 0.08;
+    double Ki_l = 0.05;
+    double Kp_rot = 3.7;
+    double Kd_rot = 0.7;
+    double Ki_rot = 0.0;
 
-    // double proportional_lin = 0.0;
-    // double integral_lin=0.0;
-    // double derivative_lin=0.0;
-    // double proportional_rot=0.0;
-    // double integral_rot=0.0;
-    // double derivative_rot=0.0;
+    double proportional_lin = 0.0;
+    double integral_lin=0.0;
+    double derivative_lin=0.0;
+    double proportional_rot=0.0;
+    double integral_rot=0.0;
+    double derivative_rot=0.0;
 
-    // error_lin= distance;
-    // error_rot = -beta;
+    error_lin= distance;
+    error_rot = beta;
 
-    // //PID controller to go forward
-    // proportional_lin = Kp_l*error_lin;
-    // integral_lin = integral_lin_Old + Ki_l*error_lin;
-    // derivative_lin = Kd_l*(error_lin - errorOld_lin);
-    // //PID controller to align
-    // proportional_rot = Kp_rot*error_rot;
-    // integral_rot = integral_rot_Old + Ki_rot*error_rot;
-    // derivative_rot = Kd_rot*(error_rot - errorOld_rot);
+    //PID controller to go forward
+    proportional_lin = error_lin;
+    integral_lin = integral_lin_Old + error_lin;
+    derivative_lin = (error_lin - errorOld_lin);
+    //PID controller to align
+    proportional_rot = error_rot;
+    integral_rot = integral_rot_Old + error_rot;
+    derivative_rot = (error_rot - errorOld_rot);
 
-    // twist_msg.linear.x = proportional_lin + integral_lin + derivative_lin;
-    // if (twist_msg.linear.x>0.35) twist_msg.linear.x = 0.35;
+    twist_msg.linear.x = Kp_l*proportional_lin + Ki_l*integral_lin + Kd_l*derivative_lin;
+    if (twist_msg.linear.x>0.35) twist_msg.linear.x = 0.35;
 
-    // twist_msg.angular.z = proportional_rot + integral_rot + derivative_rot;
-    // if(twist_msg.angular.z > 4.0) twist_msg.angular.z = 4.0;
-    // if(twist_msg.angular.z < -4.0) twist_msg.angular.z = -4.0;
+    twist_msg.angular.z = Kp_rot*proportional_rot + Ki_rot*integral_rot + Kd_rot*derivative_rot;
+    if(twist_msg.angular.z > 4.0) twist_msg.angular.z = 4.0;
+    if(twist_msg.angular.z < -4.0) twist_msg.angular.z = -4.0;
 
-    // errorOld_lin = error_lin;
-    // integral_lin_Old = integral_lin;
-    // errorOld_rot = error_rot;
-    // integral_rot_Old = integral_rot;
+    errorOld_lin = error_lin;
+    integral_lin_Old = integral_lin;
+    errorOld_rot = error_rot;
+    integral_rot_Old = integral_rot;
 
-    // std::cout << "GOING FORWARD...."<< std::endl;
+    std::cout << "GOING FORWARD....  beta: "<< beta << ", alpha: "<< alpha << ", theta: " << robot_theta << std::endl;
 
-    
-
-
-
-
-    if(distance >0.4){
-        twist_msg.linear.x = 0.30;
-    }else if(distance >0.3){
-        twist_msg.linear.x = 0.25;
-    }else if(distance >0.2){
-        twist_msg.linear.x = 0.22;
-    }else if(distance >0.15){
-        twist_msg.linear.x = 0.20;
-    }else if(distance >0.10){
-        twist_msg.linear.x = 0.18;
-    }else if(distance >0.08){
-        twist_msg.linear.x = 0.16;
-    }else if(distance >0.05){
-        twist_msg.linear.x = 0.15;
-    }else if(distance >0.0){
-        twist_msg.linear.x = 0.10;
-    }
-    twist_msg.angular.z =0.0;
-    std::cout << "Twist linear x: "<< twist_msg.linear.x << std::endl;
-    std::cout << "Twist angular z: "<< twist_msg.angular.z << std::endl;
     twist_pub.publish(twist_msg);
+
+
+
+
+    // if(distance >0.4){
+    //     twist_msg.linear.x = 0.30;
+    // }else if(distance >0.3){
+    //     twist_msg.linear.x = 0.25;
+    // }else if(distance >0.2){
+    //     twist_msg.linear.x = 0.22;
+    // }else if(distance >0.15){
+    //     twist_msg.linear.x = 0.20;
+    // }else if(distance >0.10){
+    //     twist_msg.linear.x = 0.18;
+    // }else if(distance >0.08){
+    //     twist_msg.linear.x = 0.16;
+    // }else if(distance >0.05){
+    //     twist_msg.linear.x = 0.15;
+    // }else if(distance >0.0){
+    //     twist_msg.linear.x = 0.10;
+    // }
+}
 
     //std::cout << "Forward: linear x: "<< twist_msg.linear.x << ", angular z: "<<twist_msg.angular.z<< std::endl;
     
@@ -480,7 +430,6 @@ void go_forward(double distance)
 
     //twist_msg.linear.x = 0.0;
     //twist_pub.publish(twist_msg);
-}
 
 
 
@@ -604,13 +553,40 @@ void object_detected_function(ras_msgs::Object_id msg)
 
     }
 
-void current_robot_position_function(localization::Position msg)    //meters
-{
-   robot_x=msg.x;
-   robot_y=msg.y;
-   robot_theta=msg.theta;
+    void stop_robot_and_wait(int time_wait){
+    geometry_msgs::Twist twist_msg;
+    twist_msg.linear.x = 0.0;
+    twist_msg.angular.z = 0.0;
+    twist_pub.publish(twist_msg);
+    //wait a little bit (1 second right now)
+    double control_frequency = 10.0;
+    ros::Rate loop_rate(control_frequency);
+    int counter = 0;
+    while(counter<time_wait)
+    {
+        loop_rate.sleep();
+        counter++;
+        ros::spinOnce();
+    }
+    lastTime = ros::Time::now().toSec();
 
-   pos_received = true;
+}
+
+void localization_callback(localization::Position msg)    //meters
+{
+    robot_x=msg.x;
+    robot_y=msg.y;
+    robot_theta=msg.theta;
+
+    double time_to_consider = msg.time;
+    for (int i=0; i<times_to_save;i++){
+        if (timestamp_vec[i].time>time_to_consider){
+            robot_theta += timestamp_vec[i].delta_rot;
+            robot_x += timestamp_vec[i].delta_trans*cos(robot_theta);
+            robot_y += timestamp_vec[i].delta_trans*sin(robot_theta);
+        }
+    }
+    pos_received = true;
 }
 
 
@@ -655,8 +631,10 @@ int main(int argc, char **argv)
 
             if (brain_node.check_at_correct_place())  
             {
-                std::cout << "-----------here 2 -----------"<< std::endl;
+                std::cout << "----------GO TO NEXT NODE-----------"<< std::endl;
+                brain_node.stop_robot_and_wait(5);
                 brain_node.get_next_path();
+
             }
 
             if(!final_node)
@@ -677,6 +655,3 @@ int main(int argc, char **argv)
 
     return 0;
 }
-
-
-           // std::cout << "-----------here 1 -----------"<< std::endl;
