@@ -2,7 +2,6 @@
 
 <node name="map_reader" pkg="localization" type="map_reader.py"/>
 
-<node name="grid_generator_node" pkg="grid_generator" type="grid_generator_node" /> 
 
 <node name="distance_converter" pkg="localization" type="distance_converter"/>
 

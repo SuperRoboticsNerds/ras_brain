@@ -44,21 +44,35 @@ const double object_vicinity_threshold = 0.1;
 
 
 
-//Memory for PID controller for rotation 
+//Memory for PID controller
 double errorOld_rot=0.0;
-double integral_rot_Old=0.0;
-
-//Memory for PID controller for going forward
 double errorOld_lin=0.0;
-double integral_lin_Old=0.0;
+double integral_rot=0.0;
+double integral_lin=0.0;
+
+//PID controller values
+double Kp_rot_rot = 4.0;
+double Ki_rot_rot = 0.0; 
+double Kd_rot_rot = 0.0;
+double Kp_l = 1.0;
+double Kd_l = 0.0;
+double Ki_l = 0.0;
+double Kp_rot = 3.7;
+double Kd_rot = 0.0;
+double Ki_rot = 0.0;
+
+
+
+
 double alpha;
 double lastTime;
+
 
 bool flag_has_detected = false;
 
 bool final_node = false;
 
-bool flag_forward=false;
+bool flag_moving_forward=false;
 bool flag_rotation=false;
 
 struct timestamp{
@@ -157,10 +171,11 @@ public:
 void path_vector_function(nav_msgs::GridCells msg)
 {
         paths = msg.cells;
+
         newx = paths[path_node_index].x;
         newy = paths[path_node_index].y;
-        path_node_index = 0;
-        for (int i = 0; i< paths.size(); i++) std::cout << "node(" << i << "): x =" << paths[i].x << "  y =" << paths[i].y << std::endl;
+        
+        //for (int i = 0; i< paths.size(); i++) std::cout << "node(" << i << "): x =" << paths[i].x << "  y =" << paths[i].y << std::endl;
         got_path=true;
 }
 
@@ -193,6 +208,7 @@ void fill_timestamps(){
 
 void get_next_path()
 {
+
     path_node_index++;
     if(path_node_index == paths.size()) 
     {
@@ -206,7 +222,7 @@ void get_next_path()
 
 bool check_at_correct_place()
 {
-    double threshold = 0.05;
+    double threshold = 0.04;
     
     if((fabs(robot_x - newx) < threshold) && (fabs(robot_y - newy) < threshold))  return true;
     else return false;
@@ -218,172 +234,158 @@ void move_function()
 {
     alpha = atan2(newy-robot_y,newx-robot_x);
     double dist_to_goal = std::sqrt((newx-robot_x)*(newx-robot_x) + (newy-robot_y)*(newy-robot_y));
-    double theta_temp = robot_theta;
-    //beta = (robot_theta-alpha);
-    // if(std::fabs(beta)>=M_PI){
-    //     beta=2*M_PI-beta;
-    // }
 
 
-
-    //if(theta_temp < 0) theta_temp = 2*M_PI + theta_temp;
-    //if(alpha < 0) alpha = 2*M_PI + alpha;
-    if(std::fabs(alpha-robot_theta) < std::fabs(-2.0*M_PI + alpha - robot_theta)){
-        if (std::fabs(alpha-robot_theta) < std::fabs(2.0*M_PI + alpha - robot_theta)){
-        beta = alpha-robot_theta;
+    if(std::fabs(alpha - robot_theta) < std::fabs(-2.0 * M_PI + alpha - robot_theta)){
+        if (std::fabs(alpha - robot_theta) < std::fabs(2.0 * M_PI + alpha - robot_theta)){
+        beta = alpha - robot_theta;
         }
         else{
-            beta = 2.0*M_PI + alpha - robot_theta;
+            beta = 2.0 * M_PI + alpha - robot_theta;
         }
     }
     else{
-        beta = -2.0*M_PI + alpha - robot_theta;
+        beta = -2.0 * M_PI + alpha - robot_theta;
     }
 
-    //beta = -(alpha-theta_temp);
-
-    //beta_2 = (robot_theta-alpha);
     double threshold = 0.3;
-
-
 
     // std::cout << "Beta:"<< beta <<  std::endl;
     // std::cout << "ABS(Beta):"<< fabs(beta) <<  std::endl;
 
-
     if (fabs(beta)>threshold)
     {
-        if(flag_forward)
-        {
-            errorOld_rot=0.0;
-            integral_rot_Old=0.0;
-            errorOld_lin=0.0;
-            integral_lin_Old=0.0;
-            flag_forward=false;
-            std::cout << "flag_forward:" <<  std::endl;
-        } 
-        rotate();    // Stops and aligns 
-        flag_rotation = true;
+        rotate(); // Stops and aligns 
     } 
     else
     {
-        if(flag_rotation)
-        {
-            errorOld_rot=0.0;
-            integral_rot_Old=0.0;
-            errorOld_lin=0.0;
-            integral_lin_Old=0.0;
-            flag_rotation = false;
-            std::cout << "flag_rotate:"<<  std::endl;
+        if(flag_rotation){
             stop_robot_and_wait(3);
         }
         go_forward(dist_to_goal);  
-        flag_forward = true;
-        //lastTime = ros::Time::now().toSec();
-    }     // Go forward with small corrections on the angle       
-
+    }    
 }
 
 void rotate(){
 
-
-    double now = ros::Time::now().toSec();
-    double dt = now - lastTime;
-    lastTime = now;
+    //Set some stuff true or false
+    flag_moving_forward = false;
+    if(!flag_rotation){ //This is set to true below
+        integral_rot = 0.0;
+        integral_lin = 0.0;
+        errorOld_rot = beta;
+    }
 
     geometry_msgs::Twist twist_msg;
 
     double error_rot;
 
-    double Kp_rot = 4.0;
-    double Ki_rot = 0.3; 
-    double Kd_rot = 0.00;
-
-    double proportional_rot=0.0;
-    double integral_rot=0.0;
-    double derivative_rot=0.0;
+    double proportional_rot = 0.0;
+    double derivative_rot = 0.0;
 
     error_rot = beta;
 
+    double now = ros::Time::now().toSec();
+    if (flag_rotation){
+
+        double dt = now - lastTime;
+        integral_rot += error_rot*dt;
+        derivative_rot = (error_rot - errorOld_rot)/dt;
+        //Anti windup:
+        if(std::fabs(integral_rot)>4.0){
+            integral_rot = sign(integral_rot)*4.0;
+        }
+
+    }
+    flag_rotation = true;  
+
     //PID controller to turn
     proportional_rot = error_rot;
-    integral_rot = integral_rot_Old + dt*error_rot;
-    derivative_rot = (error_rot - errorOld_rot)/dt;
-
-    //Anti windup:
-    if(std::fabs(integral_rot)>4.0){
-        integral_rot = sign(integral_rot)*5.0;
-    }
 
     twist_msg.linear.x = 0.0;
     twist_msg.angular.z = Kp_rot*proportional_rot + Ki_rot*integral_rot + Kd_rot*derivative_rot;
-    if(twist_msg.angular.z > 3.0) twist_msg.angular.z = 3.0;
-    if(twist_msg.angular.z < -3.0) twist_msg.angular.z = -3.0;
+    if(twist_msg.angular.z > 5.0) twist_msg.angular.z = 5.0;
+    if(twist_msg.angular.z < -5.0) twist_msg.angular.z = -5.0;
 
-   if(twist_msg.angular.z > 0.0) std::cout << "TURNING LEFT....  beta: "<< beta << ", alpha: "<< alpha << ", theta: " << robot_theta << std::endl;
-   if(twist_msg.angular.z < 0.0) std::cout << "TURNING RIGHT...  beta: "<< beta << ", alpha: "<< alpha << ", theta: " << robot_theta << std::endl;
+  // if(twist_msg.angular.z > 0.0) std::cout << "TURNING LEFT....  beta: "<< beta << ", alpha: "<< alpha << ", theta: " << robot_theta << std::endl;
+  // if(twist_msg.angular.z < 0.0) std::cout << "TURNING RIGHT...  beta: "<< beta << ", alpha: "<< alpha << ", theta: " << robot_theta << std::endl;
     // std::cout << "integral " << integral_rot  << std::endl;
 
     errorOld_rot = error_rot;
-    integral_rot_Old = integral_rot;
 
     twist_pub.publish(twist_msg);
-
-
 }
 
 
 
 
 void go_forward(double distance)
-{
+{   
+    //Set some stuff true or false
+    flag_rotation = false;
+    if(!flag_moving_forward){ //This is set to true below
+        integral_rot = 0.0;
+        integral_lin = 0.0;
+        errorOld_lin = distance;
+        errorOld_rot = beta;
+    }
+
     geometry_msgs::Twist twist_msg;
-    double now = ros::Time::now().toSec();
-    double dt = now - lastTime;
-    lastTime = now;
 
     double error_lin;
     double error_rot;
 
-    double Kp_l = 1.0;
-    double Kd_l = 0.08;
-    double Ki_l = 0.05;
-    double Kp_rot = 3.7;
-    double Kd_rot = 0.7;
-    double Ki_rot = 0.0;
+
 
     double proportional_lin = 0.0;
-    double integral_lin=0.0;
     double derivative_lin=0.0;
     double proportional_rot=0.0;
-    double integral_rot=0.0;
     double derivative_rot=0.0;
 
-    error_lin= distance;
+    error_lin = distance;
     error_rot = beta;
+
+    //To be able to control with pid
+    double now = ros::Time::now().toSec();
+    if (flag_moving_forward){
+        
+        double dt = now - lastTime;
+
+        integral_rot = integral_rot + error_rot*dt;
+        derivative_rot = (error_rot - errorOld_rot)/dt;
+
+        integral_lin = integral_lin + error_lin*dt;
+        derivative_lin = (error_lin - errorOld_lin)/dt;
+            //Anti windup:
+        if(std::fabs(integral_rot)>4.0){
+            integral_rot = sign(integral_rot)*4.0;
+        }
+        if(std::fabs(integral_lin)>4.0){
+            integral_lin = sign(integral_lin)*4.0;
+        }
+
+
+    }
+    lastTime = now;
+    flag_moving_forward = true;  
 
     //PID controller to go forward
     proportional_lin = error_lin;
-    integral_lin = integral_lin_Old + error_lin;
-    derivative_lin = (error_lin - errorOld_lin);
+    
     //PID controller to align
     proportional_rot = error_rot;
-    integral_rot = integral_rot_Old + error_rot;
-    derivative_rot = (error_rot - errorOld_rot);
-
+    
     twist_msg.linear.x = Kp_l*proportional_lin + Ki_l*integral_lin + Kd_l*derivative_lin;
-    if (twist_msg.linear.x>0.2) twist_msg.linear.x = 0.2;
+    if (twist_msg.linear.x>0.3) twist_msg.linear.x = 0.3;
 
     twist_msg.angular.z = Kp_rot*proportional_rot + Ki_rot*integral_rot + Kd_rot*derivative_rot;
     if(twist_msg.angular.z > 4.0) twist_msg.angular.z = 4.0;
     if(twist_msg.angular.z < -4.0) twist_msg.angular.z = -4.0;
 
     errorOld_lin = error_lin;
-    integral_lin_Old = integral_lin;
     errorOld_rot = error_rot;
-    integral_rot_Old = integral_rot;
 
-    std::cout << "GOING FORWARD....  beta: "<< beta << ", alpha: "<< alpha << ", theta: " << robot_theta << std::endl;
+   // std::cout << "GOING FORWARD....  beta: "<< beta << ", alpha: "<< alpha << ", theta: " << robot_theta << std::endl;
 
     twist_pub.publish(twist_msg);
 
@@ -393,7 +395,6 @@ void object_classified_callback(ras_msgs::Object_id msg){
      object_to_classify = msg;
      flag_object_detected = true;
 }
-
 
 
 
@@ -543,9 +544,19 @@ void stop_robot_and_wait(int time_wait){
         counter++;
         ros::spinOnce();
     }
-    lastTime = ros::Time::now().toSec();
+    
 
 }
+
+bool check_if_object_is_close(double x,double y){
+    double angle_derp = atan2(y,x);
+    if(sqrt(x*x + y*y)<=0.3 && std::fabs(angle_derp)<0.6){
+        return true;
+    }else{
+        return false;
+    }
+}
+
 
 //Returns true if we believe that this is a new object
 bool new_object_detected(double x,double y){
@@ -563,6 +574,7 @@ bool new_object_detected(double x,double y){
             double marker_y = marker_object_vec.markers[i].pose.position.y;
 
             double dist = sqrt((marker_x - x_global)*(marker_x - x_global) + (marker_y - y_global)*(marker_y - y_global));
+            std::cout << "object is on distance: "<< dist << std::endl;
             if (dist<=object_vicinity_threshold){
                 return false;
 
@@ -577,7 +589,7 @@ bool new_object_detected(double x,double y){
 
 void stop_and_classify_object(){
     flag_object_detected = false;
-    stop_robot_and_wait(30);
+    stop_robot_and_wait(18);
     classify_object();
 
 
@@ -621,6 +633,30 @@ private:
 };
 
 
+
+
+bool setup(ros::NodeHandle nh){
+    if (!nh.hasParam("has_parameters")){
+        return false;
+    }
+
+    nh.getParam("/control_Kp_rot_rot", Kp_rot_rot);
+    nh.getParam("/control_Ki_rot_rot", Ki_rot_rot);
+    nh.getParam("/control_Kd_rot_rot", Kd_rot_rot);
+
+    nh.getParam("/control_Kd_l", Kp_l);
+    nh.getParam("/control_Ki_l", Ki_l);
+    nh.getParam("/control_Kd_l", Kd_l);
+
+    nh.getParam("/control_Kp_rot", Kp_rot);
+    nh.getParam("/control_Ki_rot", Ki_rot);
+    nh.getParam("/control_Kd_rot", Kd_rot);
+
+
+    return true;
+}
+
+
 int main(int argc, char **argv)
 {
 
@@ -628,6 +664,10 @@ int main(int argc, char **argv)
     closest_object.y = -500.0;
     ros::init(argc, argv, "brain_node");
     BrainNode brain_node;
+
+    if(!setup(brain_node.n)){
+        return 1; //Error, no parameters
+    }
    
 
     // Control @ 10 Hz
@@ -637,10 +677,10 @@ int main(int argc, char **argv)
     
     while(brain_node.n.ok())
     {
-        if (flag_has_detected && brain_node.new_object_detected(closest_object.x,closest_object.y)){
+        if (flag_has_detected && brain_node.new_object_detected(closest_object.x,closest_object.y) && brain_node.check_if_object_is_close(closest_object.x,closest_object.y)){
             brain_node.stop_and_classify_object(); //This will do ros spin withing a loop so it doesn't return immediately
             flag_has_detected = false;
-            continue;
+            //continue;
         }
         if(brain_node.got_path==true && brain_node.pos_received)
         {
@@ -658,10 +698,16 @@ int main(int argc, char **argv)
             {
                 // std::cout << "-----------here 3 -----------"<< std::endl;
                 brain_node.move_function();
+
             }else
             {
                 brain_node.got_path = false;
+                final_node=false;
                 // Ask for new path
+                std_msgs::Int32 request_path_message_herp_derp;
+                request_path_message_herp_derp.data = 1;
+                brain_node.request_pub_.publish(request_path_message_herp_derp);
+
             }  
 
 
@@ -674,3 +720,4 @@ int main(int argc, char **argv)
 
     return 0;
 }
+
