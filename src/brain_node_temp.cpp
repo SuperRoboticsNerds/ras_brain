@@ -61,8 +61,10 @@ double Kp_rot = 3.7;
 double Kd_rot = 0.0;
 double Ki_rot = 0.0;
 
+double node_vicinity_threshold = 0.045;
+double rotation_threshold = 0.3;
 
-
+double control_frequency = 30.0; 
 
 double alpha;
 double lastTime;
@@ -72,8 +74,8 @@ bool flag_has_detected = false;
 
 bool final_node = false;
 
-bool flag_moving_forward=false;
-bool flag_rotation=false;
+bool flag_moving_forward = false;
+bool flag_rotation = false;
 
 struct timestamp{
     double time;
@@ -222,9 +224,9 @@ void get_next_path()
 
 bool check_at_correct_place()
 {
-    double threshold = 0.04;
     
-    if((fabs(robot_x - newx) < threshold) && (fabs(robot_y - newy) < threshold))  return true;
+    
+    if((fabs(robot_x - newx) < node_vicinity_threshold) && (fabs(robot_y - newy) < node_vicinity_threshold))  return true;
     else return false;
 
 
@@ -248,20 +250,23 @@ void move_function()
         beta = -2.0 * M_PI + alpha - robot_theta;
     }
 
-    double threshold = 0.3;
-
+    
     // std::cout << "Beta:"<< beta <<  std::endl;
     // std::cout << "ABS(Beta):"<< fabs(beta) <<  std::endl;
 
-    if (fabs(beta)>threshold)
+    if (fabs(beta)>rotation_threshold)
     {
+        std::cout << "rotation" << std::endl;
         rotate(); // Stops and aligns 
     } 
     else
     {
         if(flag_rotation){
+
             stop_robot_and_wait(3);
+            flag_rotation = false; //TODO: this is correct but can be confusing. If you want to remove this, think carefully.
         }
+        std::cout << "forward" << std::endl;
         go_forward(dist_to_goal);  
     }    
 }
@@ -376,7 +381,7 @@ void go_forward(double distance)
     proportional_rot = error_rot;
     
     twist_msg.linear.x = Kp_l*proportional_lin + Ki_l*integral_lin + Kd_l*derivative_lin;
-    if (twist_msg.linear.x>0.3) twist_msg.linear.x = 0.3;
+    if (twist_msg.linear.x>0.35) twist_msg.linear.x = 0.35;
 
     twist_msg.angular.z = Kp_rot*proportional_rot + Ki_rot*integral_rot + Kd_rot*derivative_rot;
     if(twist_msg.angular.z > 4.0) twist_msg.angular.z = 4.0;
@@ -530,12 +535,13 @@ void object_detected_callback(ras_msgs::Shape msg){
 
 
 void stop_robot_and_wait(int time_wait){
+    std::cout << "waiting for" <<  time_wait << std::endl;
     geometry_msgs::Twist twist_msg;
     twist_msg.linear.x = 0.0;
     twist_msg.angular.z = 0.0;
     twist_pub.publish(twist_msg);
     //wait a little bit (1 second right now)
-    double control_frequency = 10.0;
+
     ros::Rate loop_rate(control_frequency);
     int counter = 0;
     while(counter<time_wait)
@@ -636,7 +642,7 @@ private:
 
 
 bool setup(ros::NodeHandle nh){
-    if (!nh.hasParam("has_parameters")){
+    if (!nh.hasParam("/has_parameters")){
         return false;
     }
 
@@ -644,13 +650,17 @@ bool setup(ros::NodeHandle nh){
     nh.getParam("/control_Ki_rot_rot", Ki_rot_rot);
     nh.getParam("/control_Kd_rot_rot", Kd_rot_rot);
 
-    nh.getParam("/control_Kd_l", Kp_l);
+    nh.getParam("/control_Kp_l", Kp_l);
     nh.getParam("/control_Ki_l", Ki_l);
     nh.getParam("/control_Kd_l", Kd_l);
 
     nh.getParam("/control_Kp_rot", Kp_rot);
     nh.getParam("/control_Ki_rot", Ki_rot);
     nh.getParam("/control_Kd_rot", Kd_rot);
+
+    nh.getParam("/node_vicinity_threshold", node_vicinity_threshold);
+    nh.getParam("/rotation_threshold", rotation_threshold);
+    
 
 
     return true;
@@ -660,18 +670,21 @@ bool setup(ros::NodeHandle nh){
 int main(int argc, char **argv)
 {
 
+    std::cout << "starting burainuuuu" << std::endl;
+
     closest_object.x = -500.0;
     closest_object.y = -500.0;
     ros::init(argc, argv, "brain_node");
     BrainNode brain_node;
 
     if(!setup(brain_node.n)){
+        std::cout << "phukk yooooo" << std::endl;
         return 1; //Error, no parameters
     }
    
 
     // Control @ 10 Hz
-    double control_frequency = 10.0;  
+     
     ros::Rate loop_rate(control_frequency);
 
     
@@ -718,6 +731,6 @@ int main(int argc, char **argv)
         loop_rate.sleep();
      }
 
+     std::cout << "WATTAFAKK MAAAEEEEEEN" << std::endl;
     return 0;
 }
-
