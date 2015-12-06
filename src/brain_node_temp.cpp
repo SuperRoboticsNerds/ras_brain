@@ -384,7 +384,7 @@ void go_forward(double distance)
     derivative_rot = (error_rot - errorOld_rot);
 
     twist_msg.linear.x = Kp_l*proportional_lin + Ki_l*integral_lin + Kd_l*derivative_lin;
-    if (twist_msg.linear.x>0.35) twist_msg.linear.x = 0.35;
+    if (twist_msg.linear.x>0.2) twist_msg.linear.x = 0.2;
 
     twist_msg.angular.z = Kp_rot*proportional_rot + Ki_rot*integral_rot + Kd_rot*derivative_rot;
     if(twist_msg.angular.z > 4.0) twist_msg.angular.z = 4.0;
@@ -437,7 +437,7 @@ void go_forward(double distance)
 void object_detected_function(ras_msgs::Object_id msg)
 {
     current_object_id = msg;
-
+    std::cout << "got message from akash"<< std::endl;
     x = (robot_x + current_object_id.x*cos(robot_theta));
     y = (robot_y + current_object_id.y*sin(robot_theta));
 
@@ -647,10 +647,10 @@ int main(int argc, char **argv)
                 // Ask for new path
             }  
 
-            if(object_seen)
-            {
+            // if(object_seen)
+            // {
                 
-            } 
+            // } 
         }
 
 
