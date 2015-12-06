@@ -6,6 +6,7 @@
 #include <cmath> 
 #include "ros/ros.h"
 #include "ras_msgs/Object_id.h"
+#include "ras_msgs/Shape.h"
 #include "std_msgs/Bool.h"
 #include "std_msgs/String.h"
 #include "std_msgs/Int64.h"
@@ -39,6 +40,9 @@
 
 
 const int times_to_save = 50;
+const double object_vicinity_threshold = 0.1;
+
+
 
 //Memory for PID controller for rotation 
 double errorOld_rot=0.0;
@@ -50,6 +54,8 @@ double integral_lin_Old=0.0;
 double alpha;
 double lastTime;
 
+bool flag_has_detected = false;
+
 bool final_node = false;
 
 bool flag_forward=false;
@@ -60,6 +66,14 @@ struct timestamp{
     double delta_trans;
     double delta_rot;
 };
+
+
+struct vector2{
+    double x;
+    double y;
+};
+
+struct vector2 closest_object;
 
 
 double sign(double val) {
@@ -78,10 +92,12 @@ public:
 
     std_msgs::Float32MultiArray vec_data;
 
+    ras_msgs::Object_id object_to_classify;
+
     nav_msgs::OccupancyGrid grid_cost;
     nav_msgs::OccupancyGrid grid_obs;
 
-    ras_msgs::Object_id current_object_id;
+   // ras_msgs::Object_id object_to_classify;
 
     geometry_msgs::Point Path[];
     geometry_msgs::PointStamped object_pos_to_cost_map;
@@ -90,44 +106,46 @@ public:
     visualization_msgs::MarkerArray marker_object_vec;
 
 
+    bool flag_object_detected;
+
     bool got_path;
     bool pos_received ;
 
     ros::NodeHandle n;
 
-    ros::Subscriber object_pos_sub_;
+    ros::Subscriber object_classified_sub_;
+    ros::Subscriber object_detected_sub;
     ros::Subscriber robot_pos_sub_;
     ros::Subscriber path_sub;
     ros::Subscriber odom_sub;
 
     ros::Publisher marker_object_pub;
     ros::Publisher object_pos_pub;
-    ros::Publisher requst_pub_;
+    ros::Publisher request_pub_;
     ros::Publisher twist_pub;
 
     BrainNode()
     {
         n = ros::NodeHandle("~");
-        object_seen = false;
         got_path=false;
         pos_received = false;
-        path_node_index =0;
+        flag_object_detected = false;
+        path_node_index = 0;
 
         fill_timestamps();
 
         //The rows and cols needs to be one bigger than the length of the outer walls
         //grid_cost_map_pub = n.advertise<std::vector< std::vector<struct position_node> >("test",1);
-        path_sub = n.subscribe<nav_msgs::GridCells>( "/nodes_generator/path", 1,&BrainNode::path_vector_function,this);
-        object_pos_sub_ = n.subscribe<ras_msgs::Object_id>("/object/object",1,&BrainNode::object_detected_function,this);
-        robot_pos_sub_ = n.subscribe<localization::Position>("/position",1,&BrainNode::localization_callback,this);
+        path_sub = n.subscribe<nav_msgs::GridCells>( "/nodes_generator/path", 10,&BrainNode::path_vector_function,this);
+        object_classified_sub_ = n.subscribe<ras_msgs::Object_id>("/object/object",10,&BrainNode::object_classified_callback,this);
+        object_detected_sub = n.subscribe<ras_msgs::Shape>("/object/shape",10,&BrainNode::object_detected_callback,this);
+        robot_pos_sub_ = n.subscribe<localization::Position>("/position",10,&BrainNode::localization_callback,this);
         odom_sub = n.subscribe<motors::odometry>("/odometry",10,&BrainNode::odom_callback,this);
-
-
         
-        requst_pub_ = n.advertise<std_msgs::Int32>("/grid_generator/update_query", 100);
-        twist_pub = n.advertise<geometry_msgs::Twist>("/motor_controller/twist",100);
-        marker_object_pub = n.advertise<visualization_msgs::MarkerArray>( "/object_to_rvis_grid_map", 1);
-        object_pos_pub= n.advertise<geometry_msgs::PointStamped>( "/object_pos", 1);
+        request_pub_ = n.advertise<std_msgs::Int32>("/grid_generator/update_query", 10);
+        twist_pub = n.advertise<geometry_msgs::Twist>("/motor_controller/twist",10);
+        marker_object_pub = n.advertise<visualization_msgs::MarkerArray>( "/object_to_rvis_grid_map", 10);
+        object_pos_pub= n.advertise<geometry_msgs::PointStamped>( "/object_pos", 10);
     }
     ~BrainNode()
     {
@@ -141,6 +159,7 @@ void path_vector_function(nav_msgs::GridCells msg)
         paths = msg.cells;
         newx = paths[path_node_index].x;
         newy = paths[path_node_index].y;
+        path_node_index = 0;
         for (int i = 0; i< paths.size(); i++) std::cout << "node(" << i << "): x =" << paths[i].x << "  y =" << paths[i].y << std::endl;
         got_path=true;
 }
@@ -188,22 +207,7 @@ void get_next_path()
 bool check_at_correct_place()
 {
     double threshold = 0.05;
-    // for(int i = -5; i <= 5;i++)
-    // {
-    //     for(int j = -5; j <= 5;j++)
-    //     {
-    //         if((floor(robot_x) == floor(newx+(i/100))) && (floor(robot_y)==floor(newy+(j/100))))
-    //         {
-    //             get_next_path();
-    //         }
-    //     }
-    // }
-
-    // std::cout << "robot: x= " << robot_x << "  y = " << robot_y << std::endl;
-    // std::cout << "nó: x= " << newx << "  y = " << newy << std::endl;
-    // std::cout << "ABS diff: x= " << fabs(robot_x - newx) << "  y = " << fabs(robot_y - newy) << std::endl;
-
-
+    
     if((fabs(robot_x - newx) < threshold) && (fabs(robot_y - newy) < threshold))  return true;
     else return false;
 
@@ -278,22 +282,6 @@ void move_function()
         //lastTime = ros::Time::now().toSec();
     }     // Go forward with small corrections on the angle       
 
-
-
-
-}
-
-
-
-void move_to_object()
-
-{
-
-    //rotate(angle_to_object);
-
-    //perhaps move a little close
-
-    //ask for determination - 
 }
 
 void rotate(){
@@ -399,59 +387,36 @@ void go_forward(double distance)
 
     twist_pub.publish(twist_msg);
 
-
-
-
-    // if(distance >0.4){
-    //     twist_msg.linear.x = 0.30;
-    // }else if(distance >0.3){
-    //     twist_msg.linear.x = 0.25;
-    // }else if(distance >0.2){
-    //     twist_msg.linear.x = 0.22;
-    // }else if(distance >0.15){
-    //     twist_msg.linear.x = 0.20;
-    // }else if(distance >0.10){
-    //     twist_msg.linear.x = 0.18;
-    // }else if(distance >0.08){
-    //     twist_msg.linear.x = 0.16;
-    // }else if(distance >0.05){
-    //     twist_msg.linear.x = 0.15;
-    // }else if(distance >0.0){
-    //     twist_msg.linear.x = 0.10;
-    // }
 }
 
-    //std::cout << "Forward: linear x: "<< twist_msg.linear.x << ", angular z: "<<twist_msg.angular.z<< std::endl;
-    
-   // double start_time =ros::Time::now().toSec();
-    //while (ros::Time::now().toSec()-start_time<FORWARD_DURATION){
-    
-     //}
-
-    //twist_msg.linear.x = 0.0;
-    //twist_pub.publish(twist_msg);
+void object_classified_callback(ras_msgs::Object_id msg){
+     object_to_classify = msg;
+     flag_object_detected = true;
+}
 
 
 
 
-void object_detected_function(ras_msgs::Object_id msg)
+
+
+void classify_object()
 {
-    current_object_id = msg;
+    if (!flag_object_detected) return;
+    if(!new_object_detected(object_to_classify.x,object_to_classify.y)) return;
+    
     std::cout << "got message from akash"<< std::endl;
-    x = (robot_x + current_object_id.x*cos(robot_theta));
-    y = (robot_y + current_object_id.y*sin(robot_theta));
+    double x = (robot_x + object_to_classify.x*cos(robot_theta) - object_to_classify.y*sin(robot_theta));
+    double y = (robot_y + object_to_classify.x*sin(robot_theta) + object_to_classify.y*cos(robot_theta));
 
-    if(current_object_id.object==200){
+    //TODO: if old thing at this position, don't do anthing.
+
+    if(object_to_classify.object==200){
       // Here it is debris
 
 
     }
-    else if(current_object_id.object==100){
-        //If not already recognized at this position:
-            object_seen = true;
-            angle_to_object = atan2(current_object_id.y,current_object_id.x);
+    //else if(object_to_classify.object==100){ //unknown}
 
-    }
     else{
         marker_object.color.a = 1.0; // Don't forget to set the alpha!
         marker_object.header.frame_id = "/map";
@@ -463,63 +428,63 @@ void object_detected_function(ras_msgs::Object_id msg)
         marker_object.pose.orientation.y = 0;
         marker_object.pose.orientation.z = 0;
         marker_object.pose.orientation.w = 1.0;
-        if(current_object_id.shape ==2){// Blue Cube
+        if(object_to_classify.shape ==2){// Blue Cube
             marker_object.type = visualization_msgs::Marker::CUBE;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 0.0;
             marker_object.color.g = 0.0;
             marker_object.color.b = 1.0;
         }
-        if(current_object_id.shape ==3){// Green Cube
+        if(object_to_classify.shape ==3){// Green Cube
             marker_object.type = visualization_msgs::Marker::CUBE;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 0.0;
             marker_object.color.g = 1.0;
             marker_object.color.b = 0.0;
         }
-        if(current_object_id.shape ==4){// Yellow cube
+        if(object_to_classify.shape ==4){// Yellow cube
             marker_object.type = visualization_msgs::Marker::CUBE;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 1.0;
             marker_object.color.g = 1.0;
             marker_object.color.b = 0.0;
         }
-        if(current_object_id.shape ==5){// yellow Ball
+        if(object_to_classify.shape ==5){// yellow Ball
             marker_object.type = visualization_msgs::Marker::SPHERE;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 1.0;
             marker_object.color.g = 1.0;
             marker_object.color.b = 0.0;
         }
-        if(current_object_id.shape ==6){// red ball
+        if(object_to_classify.shape ==6){// red ball
             marker_object.type = visualization_msgs::Marker::SPHERE;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 1.0;
             marker_object.color.g = 0.0;
             marker_object.color.b = 0.0;
         }
-        if(current_object_id.shape ==7){// green cylinder
+        if(object_to_classify.shape ==7){// green cylinder
             marker_object.type = visualization_msgs::Marker::CYLINDER;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 0.0;
             marker_object.color.g = 1.0;
             marker_object.color.b = 0.0;
         }
-        if(current_object_id.shape ==8){// blue triangle
+        if(object_to_classify.shape ==8){// blue triangle
             marker_object.type = visualization_msgs::Marker::LINE_LIST;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 1.0;
             marker_object.color.g = 0.0;
             marker_object.color.b = 1.0;
         }
-        if(current_object_id.shape ==9){//purple cross
+        if(object_to_classify.shape ==9){//purple cross
             marker_object.type = visualization_msgs::Marker::LINE_LIST;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 0.5;
             marker_object.color.g = 0.2;
             marker_object.color.b = 1.0;
         }
-        if(current_object_id.shape ==10){// orange star aka patric
+        if(object_to_classify.shape ==10){// orange star aka patric
             marker_object.type = visualization_msgs::Marker::LINE_LIST;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 1.0;
@@ -529,11 +494,11 @@ void object_detected_function(ras_msgs::Object_id msg)
 
 
 
-    //marker_object.header.stamp = current_object_id.time;
+    //marker_object.header.stamp = object_to_classify.time;
     marker_object.header.stamp = ros::Time::now();
     marker_object.id = object_counter;
-    marker_object.pose.position.x = y;
-    marker_object.pose.position.y = x;
+    marker_object.pose.position.x = x;
+    marker_object.pose.position.y = y;
     
 
     object_pos_to_cost_map.header.stamp = ros::Time::now();  
@@ -553,7 +518,17 @@ void object_detected_function(ras_msgs::Object_id msg)
 
     }
 
-    void stop_robot_and_wait(int time_wait){
+
+void object_detected_callback(ras_msgs::Shape msg){
+    closest_object.x = msg.x;
+    closest_object.y = msg.y;
+    flag_has_detected = true;
+}
+
+
+
+
+void stop_robot_and_wait(int time_wait){
     geometry_msgs::Twist twist_msg;
     twist_msg.linear.x = 0.0;
     twist_msg.angular.z = 0.0;
@@ -569,6 +544,43 @@ void object_detected_function(ras_msgs::Object_id msg)
         ros::spinOnce();
     }
     lastTime = ros::Time::now().toSec();
+
+}
+
+//Returns true if we believe that this is a new object
+bool new_object_detected(double x,double y){
+
+    //If the object is close enought and within some angle
+    //x, y local coordinates
+    double angle_derp = atan2(y,x);
+    if(sqrt(x*x + y*y)<0.3 && std::fabs(angle_derp)<0.6){
+    
+        double x_global = robot_x + x*cos(robot_theta) - y*sin(robot_theta);
+        double y_global = robot_y + x*sin(robot_theta) + y*cos(robot_theta);
+        for(int i=0; i<marker_object_vec.markers.size(); i++)
+        {
+            double marker_x = marker_object_vec.markers[i].pose.position.x;
+            double marker_y = marker_object_vec.markers[i].pose.position.y;
+
+            double dist = sqrt((marker_x - x_global)*(marker_x - x_global) + (marker_y - y_global)*(marker_y - y_global));
+            if (dist<=object_vicinity_threshold){
+                return false;
+
+            }
+
+        }
+    }
+    // and if the object is not detected at that point before
+    return true;
+}
+
+
+void stop_and_classify_object(){
+    flag_object_detected = false;
+    stop_robot_and_wait(30);
+    classify_object();
+
+
 
 }
 
@@ -592,7 +604,6 @@ void localization_callback(localization::Position msg)    //meters
 
 private:
 
- bool object_seen;
 
  int rows;
  int col; 
@@ -602,8 +613,6 @@ private:
  double beta;
  double xEnd;
  double xStep;
- double x;
- double y;
  double angle_to_object;
  double newx, newy;
  double robot_x;
@@ -614,6 +623,9 @@ private:
 
 int main(int argc, char **argv)
 {
+
+    closest_object.x = -500.0;
+    closest_object.y = -500.0;
     ros::init(argc, argv, "brain_node");
     BrainNode brain_node;
    
@@ -624,7 +636,12 @@ int main(int argc, char **argv)
 
     
     while(brain_node.n.ok())
-    {   
+    {
+        if (flag_has_detected && brain_node.new_object_detected(closest_object.x,closest_object.y)){
+            brain_node.stop_and_classify_object(); //This will do ros spin withing a loop so it doesn't return immediately
+            flag_has_detected = false;
+            continue;
+        }
         if(brain_node.got_path==true && brain_node.pos_received)
         {
              // std::cout << "-----------here 1 -----------"<< std::endl;
@@ -632,7 +649,7 @@ int main(int argc, char **argv)
             if (brain_node.check_at_correct_place())  
             {
                 std::cout << "----------GO TO NEXT NODE-----------"<< std::endl;
-                brain_node.stop_robot_and_wait(5);
+                brain_node.stop_robot_and_wait(5); //This will do ros spin withing a loop so it doesn't return immediately
                 brain_node.get_next_path();
 
             }
@@ -647,10 +664,7 @@ int main(int argc, char **argv)
                 // Ask for new path
             }  
 
-            // if(object_seen)
-            // {
-                
-            // } 
+
         }
 
 

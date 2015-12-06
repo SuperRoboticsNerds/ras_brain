@@ -1,21 +1,13 @@
 <launch>
 
-
-
 <node name="map_reader" pkg="localization" type="map_reader.py"/>
 
-
-
-
-<node name="grid_generator_node" pkg="grid_generator" type="grid_generator_node" />
- 
-
+<node name="grid_generator_node" pkg="grid_generator" type="grid_generator_node" /> 
 
 <node name="distance_converter" pkg="localization" type="distance_converter"/>
 
 <node
  name="depth_readings_publisher_node" pkg="localization" type="depth_readings_publisher_node" />
-
 
 <node
  name="particle_filter_with_depth_sensor" pkg="localization" type="particle_filter_with_depth_sensor" />
