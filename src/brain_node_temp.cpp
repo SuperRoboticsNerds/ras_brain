@@ -388,11 +388,12 @@ void go_forward(double distance)
     proportional_rot = error_rot;
     
     twist_msg.linear.x = Kp_l*proportional_lin + Ki_l*integral_lin + Kd_l*derivative_lin;
-    if (twist_msg.linear.x>0.35) twist_msg.linear.x = 0.35;
+    if (twist_msg.linear.x>0.4) twist_msg.linear.x = 0.4;
+    if (twist_msg.linear.x<0.1) twist_msg.linear.x = 0.1;
 
     twist_msg.angular.z = Kp_rot*proportional_rot + Ki_rot*integral_rot + Kd_rot*derivative_rot;
-    if(twist_msg.angular.z > 4.0) twist_msg.angular.z = 4.0;
-    if(twist_msg.angular.z < -4.0) twist_msg.angular.z = -4.0;
+    if(twist_msg.angular.z > 3.0) twist_msg.angular.z = 3.0;
+    if(twist_msg.angular.z < -3.0) twist_msg.angular.z = -3.0;
 
     errorOld_lin = error_lin;
     errorOld_rot = error_rot;
@@ -414,12 +415,15 @@ void object_classified_callback(ras_msgs::Object_id msg){
 
 void classify_object()
 {
-    if (!flag_object_detected) return;
-    if(!new_object_detected(object_to_classify.x,object_to_classify.y)) return;
+    //if (!flag_object_detected) return; //TODO: maybe do this.
+    //if(!new_object_detected(object_to_classify.x,object_to_classify.y)) return;
     
     std::cout << "got message from akash"<< std::endl;
-    double x = (robot_x + object_to_classify.x*cos(robot_theta) - object_to_classify.y*sin(robot_theta));
-    double y = (robot_y + object_to_classify.x*sin(robot_theta) + object_to_classify.y*cos(robot_theta));
+    //double x = (robot_x + object_to_classify.x*cos(robot_theta) - object_to_classify.y*sin(robot_theta));
+    //double y = (robot_y + object_to_classify.x*sin(robot_theta) + object_to_classify.y*cos(robot_theta));
+
+    double x = (robot_x + closest_object.x*cos(robot_theta) - closest_object.y*sin(robot_theta));
+    double y = (robot_y + closest_object.x*sin(robot_theta) + closest_object.y*cos(robot_theta));
 
     //TODO: if old thing at this position, don't do anthing.
 
@@ -529,7 +533,7 @@ void classify_object()
     }
 
 
-    }
+}
 
 
 void object_detected_callback(ras_msgs::Shape msg){
@@ -562,9 +566,9 @@ void stop_robot_and_wait(int time_wait){
 }
 
 bool check_if_object_is_close(double x,double y){
-   // double angle_derp = atan2(y,x);
+   double angle_derp = atan2(y,x);
     std::cout << sqrt(x*x + y*y) << std::endl;
-    if(sqrt(x*x + y*y)<=0.4){// && std::fabs(angle_derp)<0.6){
+    if(sqrt(x*x + y*y)<=0.4 && std::fabs(angle_derp)<0.6 ){
         return true;
     }else{
         return false;
@@ -604,7 +608,7 @@ bool new_object_detected(double x,double y){
 void stop_and_classify_object(){
     std::cout << "classifying" << std::endl;
     flag_object_detected = false;
-    stop_robot_and_wait(30);
+    stop_robot_and_wait(100);
     classify_object();
 
 
