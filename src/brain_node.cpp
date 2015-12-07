@@ -390,7 +390,7 @@ void go_forward(double distance)
     proportional_rot = error_rot;
     
     twist_msg.linear.x = Kp_l*proportional_lin + Ki_l*integral_lin + Kd_l*derivative_lin;
-    if (twist_msg.linear.x>0.4) twist_msg.linear.x = 0.4;
+    if (twist_msg.linear.x>0.4) twist_msg.linear.x = 0.3;//0.4 was good
     if (twist_msg.linear.x<0.1) twist_msg.linear.x = 0.1;
 
     twist_msg.angular.z = Kp_rot*proportional_rot + Ki_rot*integral_rot + Kd_rot*derivative_rot;
@@ -429,86 +429,115 @@ void classify_object()
 
     //TODO: if old thing at this position, don't do anthing.
 
-    if(object_to_classify.object==200){
-      // Here it is debris
 
-
-    }
     //else if(object_to_classify.object==100){ //unknown}
 
-    else{
+
         marker_object.color.a = 1.0; // Don't forget to set the alpha!
         marker_object.header.frame_id = "/map";
         marker_object.ns = "object";
         marker_object.scale.x = 0.05;
         marker_object.scale.y = 0.05;
-        marker_object.scale.z = 0.0;
+        marker_object.scale.z = 0.05;
         marker_object.pose.orientation.x = 0;
         marker_object.pose.orientation.y = 0;
         marker_object.pose.orientation.z = 0;
         marker_object.pose.orientation.w = 1.0;
-        if(object_to_classify.shape ==2){// Blue Cube
+        if(object_to_classify.object==1){// Red Cube
+            marker_object.type = visualization_msgs::Marker::CUBE;
+            marker_object.action = visualization_msgs::Marker::ADD;
+            marker_object.color.r = 1.0;
+            marker_object.color.g = 0.0;
+            marker_object.color.b = 0.0;
+            std::cout<<" Red Cube "<<std::endl;
+        }
+        if(object_to_classify.object==2){// Blue Cube
             marker_object.type = visualization_msgs::Marker::CUBE;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 0.0;
             marker_object.color.g = 0.0;
             marker_object.color.b = 1.0;
+            std::cout<<" Blue Cube "<<std::endl;
         }
-        if(object_to_classify.shape ==3){// Green Cube
+        if(object_to_classify.object ==3){// Green Cube
             marker_object.type = visualization_msgs::Marker::CUBE;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 0.0;
             marker_object.color.g = 1.0;
             marker_object.color.b = 0.0;
+            std::cout<<" Green Cube "<<std::endl;
         }
-        if(object_to_classify.shape ==4){// Yellow cube
+        if(object_to_classify.object ==4){// Yellow cube
             marker_object.type = visualization_msgs::Marker::CUBE;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 1.0;
             marker_object.color.g = 1.0;
             marker_object.color.b = 0.0;
+            std::cout<<" Yellow cube "<<std::endl;
         }
-        if(object_to_classify.shape ==5){// yellow Ball
+        if(object_to_classify.object ==5){// yellow Ball
             marker_object.type = visualization_msgs::Marker::SPHERE;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 1.0;
             marker_object.color.g = 1.0;
             marker_object.color.b = 0.0;
+            std::cout<<" yellow Ball "<<std::endl;
         }
-        if(object_to_classify.shape ==6){// red ball
+        if(object_to_classify.object==6){// red ball
             marker_object.type = visualization_msgs::Marker::SPHERE;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 1.0;
             marker_object.color.g = 0.0;
             marker_object.color.b = 0.0;
+            std::cout<<" Red ball "<<std::endl;
         }
-        if(object_to_classify.shape ==7){// green cylinder
+        if(object_to_classify.object ==7){// green cylinder
             marker_object.type = visualization_msgs::Marker::CYLINDER;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 0.0;
             marker_object.color.g = 1.0;
             marker_object.color.b = 0.0;
+            std::cout<<" Green cylinder "<<std::endl;
         }
-        if(object_to_classify.shape ==8){// blue triangle
+        if(object_to_classify.object ==8){// blue triangle
             marker_object.type = visualization_msgs::Marker::LINE_LIST;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 1.0;
             marker_object.color.g = 0.0;
             marker_object.color.b = 1.0;
+            std::cout<<" Blue triangle "<<std::endl;
         }
-        if(object_to_classify.shape ==9){//purple cross
+        if(object_to_classify.object ==9){//purple cross
             marker_object.type = visualization_msgs::Marker::LINE_LIST;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 0.5;
             marker_object.color.g = 0.2;
             marker_object.color.b = 1.0;
+            std::cout<<" Purple cross "<<std::endl;
         }
-        if(object_to_classify.shape ==10){// orange star aka patric
+        if(object_to_classify.object ==10){// orange star aka patric
             marker_object.type = visualization_msgs::Marker::LINE_LIST;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 1.0;
             marker_object.color.g = 0.4;
             marker_object.color.b = 0.0;
+            std::cout<<" Orange star "<<std::endl;
+        }
+         if(object_to_classify.object ==11){//purple star
+            marker_object.type = visualization_msgs::Marker::LINE_LIST;
+            marker_object.action = visualization_msgs::Marker::ADD;
+            marker_object.color.r = 0.5;
+            marker_object.color.g = 0.2;
+            marker_object.color.b = 1.0;
+            std::cout<<" Purple star "<<std::endl;
+        }
+        if(object_to_classify.object ==12){//red hollow cube
+            marker_object.type = visualization_msgs::Marker::LINE_LIST;
+            marker_object.action = visualization_msgs::Marker::ADD;
+            marker_object.color.r = 1.0;
+            marker_object.color.g = 0.0;
+            marker_object.color.b = 0.0;
+            std::cout<<" Red hollow cube "<<std::endl;
         }
 
 
@@ -532,7 +561,7 @@ void classify_object()
     object_pos_pub.publish(object_pos_to_cost_map);
 
     object_counter++;
-    }
+    
 
 
 }
