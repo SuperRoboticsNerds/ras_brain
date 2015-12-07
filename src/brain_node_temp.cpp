@@ -139,6 +139,7 @@ public:
     ros::Publisher object_pos_pub;
     ros::Publisher request_pub_;
     ros::Publisher twist_pub;
+    ros::Publisher robot_pos_pub;
 
     BrainNode()
     {
@@ -160,8 +161,9 @@ public:
         
         request_pub_ = n.advertise<std_msgs::Int32>("/grid_generator/update_query", 10);
         twist_pub = n.advertise<geometry_msgs::Twist>("/motor_controller/twist",10);
-        marker_object_pub = n.advertise<visualization_msgs::MarkerArray>( "/object_to_rvis_grid_map", 10);
+        marker_object_pub = n.advertise<visualization_msgs::MarkerArray>( "/object_marker_to_rvis", 10);
         object_pos_pub= n.advertise<geometry_msgs::PointStamped>( "/object_pos", 10);
+        robot_pos_pub = n.advertise<localization::Position>("/brain_position",10);
     }
     ~BrainNode()
     {
@@ -194,6 +196,13 @@ void odom_callback(motors::odometry msg){
     robot_theta += msg.w*msg.dt;
     robot_x += msg.v*msg.dt*cos(robot_theta);
     robot_y += msg.v*msg.dt*sin(robot_theta);
+
+    localization::Position pos_msg;
+    pos_msg.x = robot_x;
+    pos_msg.y = robot_y;
+    pos_msg.theta = robot_theta;
+
+    robot_pos_pub.publish(pos_msg);
 
     //publish_position();
 }
@@ -256,7 +265,6 @@ void move_function()
 
     if (fabs(beta)>rotation_threshold)
     {
-        std::cout << "rotation" << std::endl;
         rotate(); // Stops and aligns 
     } 
     else
@@ -266,7 +274,6 @@ void move_function()
             stop_robot_and_wait(3);
             flag_rotation = false; //TODO: this is correct but can be confusing. If you want to remove this, think carefully.
         }
-        std::cout << "forward" << std::endl;
         go_forward(dist_to_goal);  
     }    
 }
@@ -535,7 +542,7 @@ void object_detected_callback(ras_msgs::Shape msg){
 
 
 void stop_robot_and_wait(int time_wait){
-    std::cout << "waiting for" <<  time_wait << std::endl;
+    std::cout << "waiting for " <<  time_wait << std::endl;
     geometry_msgs::Twist twist_msg;
     twist_msg.linear.x = 0.0;
     twist_msg.angular.z = 0.0;
@@ -555,8 +562,9 @@ void stop_robot_and_wait(int time_wait){
 }
 
 bool check_if_object_is_close(double x,double y){
-    double angle_derp = atan2(y,x);
-    if(sqrt(x*x + y*y)<=0.3 && std::fabs(angle_derp)<0.6){
+   // double angle_derp = atan2(y,x);
+    std::cout << sqrt(x*x + y*y) << std::endl;
+    if(sqrt(x*x + y*y)<=0.4){// && std::fabs(angle_derp)<0.6){
         return true;
     }else{
         return false;
@@ -566,36 +574,37 @@ bool check_if_object_is_close(double x,double y){
 
 //Returns true if we believe that this is a new object
 bool new_object_detected(double x,double y){
+    std::cout << "new object detected?" << std::endl;
 
     //If the object is close enought and within some angle
     //x, y local coordinates
-    double angle_derp = atan2(y,x);
-    if(sqrt(x*x + y*y)<0.3 && std::fabs(angle_derp)<0.6){
-    
-        double x_global = robot_x + x*cos(robot_theta) - y*sin(robot_theta);
-        double y_global = robot_y + x*sin(robot_theta) + y*cos(robot_theta);
-        for(int i=0; i<marker_object_vec.markers.size(); i++)
-        {
-            double marker_x = marker_object_vec.markers[i].pose.position.x;
-            double marker_y = marker_object_vec.markers[i].pose.position.y;
 
-            double dist = sqrt((marker_x - x_global)*(marker_x - x_global) + (marker_y - y_global)*(marker_y - y_global));
-            std::cout << "object is on distance: "<< dist << std::endl;
-            if (dist<=object_vicinity_threshold){
-                return false;
+    double x_global = robot_x + x*cos(robot_theta) - y*sin(robot_theta);
+    double y_global = robot_y + x*sin(robot_theta) + y*cos(robot_theta);
+    for(int i=0; i<marker_object_vec.markers.size(); i++)
+    {
+        double marker_x = marker_object_vec.markers[i].pose.position.x;
+        double marker_y = marker_object_vec.markers[i].pose.position.y;
 
-            }
+        //std::cout << "here " << i << std::endl;
+
+        double dist = sqrt((marker_x - x_global)*(marker_x - x_global) + (marker_y - y_global)*(marker_y - y_global));
+        std::cout << "object is on distance: "<< dist << std::endl;
+        if (dist<=object_vicinity_threshold){
+            return false;
 
         }
+
     }
-    // and if the object is not detected at that point before
     return true;
+    
 }
 
 
 void stop_and_classify_object(){
+    std::cout << "classifying" << std::endl;
     flag_object_detected = false;
-    stop_robot_and_wait(18);
+    stop_robot_and_wait(30);
     classify_object();
 
 
@@ -672,8 +681,7 @@ int main(int argc, char **argv)
 
     std::cout << "starting burainuuuu" << std::endl;
 
-    closest_object.x = -500.0;
-    closest_object.y = -500.0;
+    
     ros::init(argc, argv, "brain_node");
     BrainNode brain_node;
 
@@ -681,19 +689,19 @@ int main(int argc, char **argv)
         std::cout << "phukk yooooo" << std::endl;
         return 1; //Error, no parameters
     }
-   
-
-    // Control @ 10 Hz
-     
+        
     ros::Rate loop_rate(control_frequency);
 
     
     while(brain_node.n.ok())
     {
-        if (flag_has_detected && brain_node.new_object_detected(closest_object.x,closest_object.y) && brain_node.check_if_object_is_close(closest_object.x,closest_object.y)){
+        if (flag_has_detected  && brain_node.check_if_object_is_close(closest_object.x,closest_object.y) && brain_node.new_object_detected(closest_object.x,closest_object.y)){
             brain_node.stop_and_classify_object(); //This will do ros spin withing a loop so it doesn't return immediately
             flag_has_detected = false;
             //continue;
+        }else{
+            closest_object.x = -500.0;
+            closest_object.y = -500.0;
         }
         if(brain_node.got_path==true && brain_node.pos_received)
         {
