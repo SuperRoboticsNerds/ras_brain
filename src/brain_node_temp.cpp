@@ -138,6 +138,7 @@ public:
     ros::Publisher marker_object_pub;
     ros::Publisher object_pos_pub;
     ros::Publisher request_pub_;
+    ros::Publisher request_back_path_pub;
     ros::Publisher twist_pub;
     ros::Publisher robot_pos_pub;
 
@@ -160,6 +161,7 @@ public:
         odom_sub = n.subscribe<motors::odometry>("/odometry",10,&BrainNode::odom_callback,this);
         
         request_pub_ = n.advertise<std_msgs::Int32>("/grid_generator/update_query", 10);
+        request_back_path_pub = n.advertise<std_msgs::Int32>("/go_home", 10);
         twist_pub = n.advertise<geometry_msgs::Twist>("/motor_controller/twist",10);
         marker_object_pub = n.advertise<visualization_msgs::MarkerArray>( "/object_marker_to_rvis", 10);
         object_pos_pub= n.advertise<geometry_msgs::PointStamped>( "/object_pos", 10);
@@ -684,6 +686,8 @@ int main(int argc, char **argv)
 {
 
     std::cout << "starting burainuuuu" << std::endl;
+    int timer = 0;
+    bool time_ran_out = false;
 
     
     ros::init(argc, argv, "brain_node");
@@ -699,44 +703,78 @@ int main(int argc, char **argv)
     
     while(brain_node.n.ok())
     {
-        if (flag_has_detected  && brain_node.check_if_object_is_close(closest_object.x,closest_object.y) && brain_node.new_object_detected(closest_object.x,closest_object.y)){
-            brain_node.stop_and_classify_object(); //This will do ros spin withing a loop so it doesn't return immediately
-            flag_has_detected = false;
-            //continue;
-        }else{
-            closest_object.x = -500.0;
-            closest_object.y = -500.0;
-        }
-        if(brain_node.got_path==true && brain_node.pos_received)
+        if(!time_ran_out)
         {
-             // std::cout << "-----------here 1 -----------"<< std::endl;
-
-            if (brain_node.check_at_correct_place())  
-            {
-                std::cout << "----------GO TO NEXT NODE-----------"<< std::endl;
-                brain_node.stop_robot_and_wait(5); //This will do ros spin withing a loop so it doesn't return immediately
-                brain_node.get_next_path();
-
+            if (flag_has_detected  && brain_node.check_if_object_is_close(closest_object.x,closest_object.y) && brain_node.new_object_detected(closest_object.x,closest_object.y)){
+                brain_node.stop_and_classify_object(); //This will do ros spin withing a loop so it doesn't return immediately
+                flag_has_detected = false;
+                //continue;
+            }else{
+                closest_object.x = -500.0;
+                closest_object.y = -500.0;
             }
 
-            if(!final_node)
+            if(brain_node.got_path==true && brain_node.pos_received)
             {
-                // std::cout << "-----------here 3 -----------"<< std::endl;
-                brain_node.move_function();
+                if (brain_node.check_at_correct_place())  
+                {
+                    std::cout << "----------GO TO NEXT NODE-----------"<< std::endl;
+                    brain_node.stop_robot_and_wait(5); //This will do ros spin withing a loop so it doesn't return immediately
+                    brain_node.get_next_path();
 
-            }else
+                }
+
+                if(!final_node)
+                {
+                    brain_node.move_function();
+
+                }else
+                {
+                    brain_node.got_path = false;
+                    final_node=false;
+                    // Ask for new path
+                    std_msgs::Int32 request_path_message_herp_derp;
+                    request_path_message_herp_derp.data = 1;
+                    brain_node.request_pub_.publish(request_path_message_herp_derp);
+
+                }  
+            }            
+        }else
+        {  
+             if(brain_node.got_path==true && brain_node.pos_received)
             {
-                brain_node.got_path = false;
-                final_node=false;
-                // Ask for new path
-                std_msgs::Int32 request_path_message_herp_derp;
-                request_path_message_herp_derp.data = 1;
-                brain_node.request_pub_.publish(request_path_message_herp_derp);
+                if (brain_node.check_at_correct_place())  
+                {
+                    std::cout << "----------GO TO NEXT NODE-----------"<< std::endl;
+                    brain_node.stop_robot_and_wait(5); //This will do ros spin withing a loop so it doesn't return immediately
+                    brain_node.get_next_path();
+                }
 
-            }  
-
+                brain_node.move_function(); 
+            }            
 
         }
+
+
+
+
+        timer++;
+        if(timer == 6300) //3min30
+        {
+            time_ran_out = true;
+            brain_node.stop_robot_and_wait(5);
+            // Time to go home
+            std_msgs::Int32 request_back_path;
+            request_back_path.data = 1;
+            brain_node.request_back_path_pub.publish(request_back_path);
+            // Ask for new path
+            std_msgs::Int32 request_path_message_herp_derp;
+            request_path_message_herp_derp.data = 1;
+            brain_node.request_pub_.publish(request_path_message_herp_derp);
+
+        }
+            
+
 
 
         ros::spinOnce();
