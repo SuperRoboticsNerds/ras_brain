@@ -6,6 +6,7 @@
 #include <cmath> 
 #include "ros/ros.h"
 #include "ras_msgs/Object_id.h"
+#include "ras_msgs/Shape.h"
 #include "std_msgs/Bool.h"
 #include "std_msgs/String.h"
 #include "std_msgs/Int64.h"
@@ -13,7 +14,7 @@
 #include "std_msgs/Float64.h"
 #include "std_msgs/Float32MultiArray.h"
 #include "nav_msgs/OccupancyGrid.h"
-#include "nav_msgs/Odometry.h"
+#include "motors/odometry.h"
 #include "nav_msgs/GridCells.h"
 #include "ras_arduino_msgs/PWM.h"
 #include "ras_arduino_msgs/Encoders.h"
@@ -35,18 +36,65 @@
 #include "message_filters/subscriber.h"
 
 //#define ROT_DURATION  0.2
-//#define FORWARD_DURATION  0.3
+#define FORWARD_DURATION  0.3
 
-//Memory for PID controller for rotation 
-//double errorOld_rot=0.0;
-//double integral_rot_Old=0.0;
 
-//Memory for PID controller for going forward
-//double errorOld_lin=0.0;
-//double integral_lin_Old=0.0;
+const int times_to_save = 50;
+const double object_vicinity_threshold = 0.1;
+
+
+
+//Memory for PID controller
+double errorOld_rot=0.0;
+double errorOld_lin=0.0;
+double integral_rot=0.0;
+double integral_lin=0.0;
+
+//PID controller values
+double Kp_rot_rot = 4.0;
+double Ki_rot_rot = 0.0; 
+double Kd_rot_rot = 0.0;
+double Kp_l = 1.0;
+double Kd_l = 0.0;
+double Ki_l = 0.0;
+double Kp_rot = 3.7;
+double Kd_rot = 0.0;
+double Ki_rot = 0.0;
+
+double node_vicinity_threshold = 0.045;
+double rotation_threshold = 0.3;
+
+double control_frequency = 30.0; 
+
+double alpha;
+double lastTime;
+
+
+bool flag_has_detected = false;
 
 bool final_node = false;
 
+bool flag_moving_forward = false;
+bool flag_rotation = false;
+
+struct timestamp{
+    double time;
+    double delta_trans;
+    double delta_rot;
+};
+
+
+struct vector2{
+    double x;
+    double y;
+};
+
+struct vector2 closest_object;
+
+
+double sign(double val) {
+    return double((0.0 < val) - (val < 0.0));
+}
 
 
 class BrainNode
@@ -56,13 +104,16 @@ public:
     std::vector< std::vector<grid_generator::Grid_map_struct> > matrix_a;
     std::vector<grid_generator::Grid_map_struct> grid_map_send;
     std::vector<geometry_msgs::Point> paths;
+    std::vector<timestamp> timestamp_vec;
 
     std_msgs::Float32MultiArray vec_data;
+
+    ras_msgs::Object_id object_to_classify;
 
     nav_msgs::OccupancyGrid grid_cost;
     nav_msgs::OccupancyGrid grid_obs;
 
-    ras_msgs::Object_id current_object_id;
+   // ras_msgs::Object_id object_to_classify;
 
     geometry_msgs::Point Path[];
     geometry_msgs::PointStamped object_pos_to_cost_map;
@@ -71,39 +122,50 @@ public:
     visualization_msgs::MarkerArray marker_object_vec;
 
 
+    bool flag_object_detected;
+
     bool got_path;
     bool pos_received ;
 
     ros::NodeHandle n;
 
-    ros::Subscriber object_pos_sub_;
+    ros::Subscriber object_classified_sub_;
+    ros::Subscriber object_detected_sub;
     ros::Subscriber robot_pos_sub_;
     ros::Subscriber path_sub;
+    ros::Subscriber odom_sub;
 
     ros::Publisher marker_object_pub;
     ros::Publisher object_pos_pub;
-    ros::Publisher requst_pub_;
+    ros::Publisher request_pub_;
+    ros::Publisher request_back_path_pub;
     ros::Publisher twist_pub;
+    ros::Publisher robot_pos_pub;
 
     BrainNode()
     {
         n = ros::NodeHandle("~");
-        object_seen = false;
         got_path=false;
         pos_received = false;
-        path_node_index =0;
+        flag_object_detected = false;
+        path_node_index = 0;
+
+        fill_timestamps();
 
         //The rows and cols needs to be one bigger than the length of the outer walls
         //grid_cost_map_pub = n.advertise<std::vector< std::vector<struct position_node> >("test",1);
-        path_sub = n.subscribe<nav_msgs::GridCells>( "/nodes_generator/path", 1,&BrainNode::path_vector_function,this);
-        object_pos_sub_ = n.subscribe<ras_msgs::Object_id>("/objects/object",1,&BrainNode::object_detected_function,this);
-        robot_pos_sub_ = n.subscribe<localization::Position>("/position",100,&BrainNode::current_robot_position_function,this);
-
+        path_sub = n.subscribe<nav_msgs::GridCells>( "/nodes_generator/path", 10,&BrainNode::path_vector_function,this);
+        object_classified_sub_ = n.subscribe<ras_msgs::Object_id>("/object/object",10,&BrainNode::object_classified_callback,this);
+        object_detected_sub = n.subscribe<ras_msgs::Shape>("/object/shape",10,&BrainNode::object_detected_callback,this);
+        robot_pos_sub_ = n.subscribe<localization::Position>("/position",10,&BrainNode::localization_callback,this);
+        odom_sub = n.subscribe<motors::odometry>("/odometry",10,&BrainNode::odom_callback,this);
         
-        requst_pub_ = n.advertise<std_msgs::Int32>("/grid_generator/update_query", 100);
-        twist_pub = n.advertise<geometry_msgs::Twist>("/motor_controller/twist",100);
-        marker_object_pub = n.advertise<visualization_msgs::MarkerArray>( "/object_to_rvis_grid_map", 1);
-        object_pos_pub= n.advertise<geometry_msgs::PointStamped>( "/object_pos", 1);
+        request_pub_ = n.advertise<std_msgs::Int32>("/grid_generator/update_query", 10);
+        request_back_path_pub = n.advertise<std_msgs::Int32>("/go_home", 10);
+        twist_pub = n.advertise<geometry_msgs::Twist>("/motor_controller/twist",10);
+        marker_object_pub = n.advertise<visualization_msgs::MarkerArray>( "/object_marker_to_rvis", 10);
+        object_pos_pub= n.advertise<geometry_msgs::PointStamped>( "/object_pos", 10);
+        robot_pos_pub = n.advertise<localization::Position>("/brain_position",10);
     }
     ~BrainNode()
     {
@@ -115,14 +177,51 @@ public:
 void path_vector_function(nav_msgs::GridCells msg)
 {
         paths = msg.cells;
+
         newx = paths[path_node_index].x;
         newy = paths[path_node_index].y;
-        for (int i = 0; i< paths.size(); i++) std::cout << "node(" << i << "): x =" << paths[i].x << "  y =" << paths[i].y << std::endl;
+        
+        //for (int i = 0; i< paths.size(); i++) std::cout << "node(" << i << "): x =" << paths[i].x << "  y =" << paths[i].y << std::endl;
         got_path=true;
+}
+
+void odom_callback(motors::odometry msg){
+
+    struct timestamp ts1;
+    ts1.time = ros::Time::now().toSec();
+    ts1.delta_trans = msg.v*msg.dt;
+    ts1.delta_rot = msg.w*msg.dt;
+
+    timestamp_vec.push_back(ts1);
+    timestamp_vec.erase(timestamp_vec.begin()); //TODO: does this really work??
+
+    robot_theta += msg.w*msg.dt;
+    robot_x += msg.v*msg.dt*cos(robot_theta);
+    robot_y += msg.v*msg.dt*sin(robot_theta);
+
+    localization::Position pos_msg;
+    pos_msg.x = robot_x;
+    pos_msg.y = robot_y;
+    pos_msg.theta = robot_theta;
+
+    robot_pos_pub.publish(pos_msg);
+
+    //publish_position();
+}
+
+void fill_timestamps(){
+    for (int i=0;i<times_to_save;i++){
+        struct timestamp ts;
+        ts.time = ros::Time::now().toSec();
+        ts.delta_rot = 0.0;
+        ts.delta_trans = 0.0;
+        timestamp_vec.push_back(ts);
+    }
 }
 
 void get_next_path()
 {
+
     path_node_index++;
     if(path_node_index == paths.size()) 
     {
@@ -136,373 +235,207 @@ void get_next_path()
 
 bool check_at_correct_place()
 {
-    double threshold = 0.1;
-    for(int i = -5; i <= 5;i++)
-    {
-        for(int j = -5; j <= 5;j++)
-        {
-            if((floor(robot_x) == floor(newx+(i/100))) && (floor(robot_y)==floor(newy+(j/100))))
-            {
-                get_next_path();
-            }
-        }
-    }
-
-    // std::cout << "robot: x= " << robot_x << "  y = " << robot_y << std::endl;
-    // std::cout << "nó: x= " << newx << "  y = " << newy << std::endl;
-    //std::cout << "ABS diff: x= " << fabs(robot_x - newx) << "  y = " << fabs(robot_y - newy) << std::endl;
-
-
-    //if((fabs(robot_x - newx) < threshold) && (fabs(robot_y - newy) < threshold))  return true;
-    //else return false;
+    
+    
+    if((fabs(robot_x - newx) < node_vicinity_threshold) && (fabs(robot_y - newy) < node_vicinity_threshold))  return true;
+    else return false;
 
 
 }
 
 void move_function()
 {
-    double alpha = atan2(newy-robot_y,newx-robot_x);
+    alpha = atan2(newy-robot_y,newx-robot_x);
     double dist_to_goal = std::sqrt((newx-robot_x)*(newx-robot_x) + (newy-robot_y)*(newy-robot_y));
-    beta = (robot_theta-alpha);
-    double beta_2 = (alpha-robot_theta);
-
-    double threshold = 0.10;
 
 
-    if(beta>M_PI)
-    {        
-        //Turn left
-         std::cout << "Turn left ---- Beta > PI:                        "<< beta<< std::endl;
-        rotate(1);
-    }else if(beta>threshold)
-    {
-        //Turn right
-         std::cout << "Turn right ---- Beta > "<< threshold <<":        "<< beta <<  std::endl;
-        rotate(2);
-    }else if(beta <(-M_PI))
-    {
-    // turn right
-         std::cout << "Turn right ---- Beta < PI:                       "<< beta <<  std::endl;
-        rotate(2);
-    }else if(beta < (-threshold))
-    {
-        //turn left
-         std::cout << "Turn left ---- Beta < "<< -1*threshold <<":         "<< beta <<  std::endl;
-        rotate(1);
-    }else if(dist_to_goal>0.005){
-        //go_forward(std::max(0.4,dist_to_goal));
-        go_forward(dist_to_goal);
-        std::cout << "go forward:                                       "<< beta<< std::endl;
-    }
-
-    //std::cout << "Beta:         "<< beta <<  std::endl;
-    //std::cout << "ABS(Beta):    "<< fabs(beta) <<  std::endl;
-
-    // if (fabs(beta)>threshold) rotate(1);    // Stops and aligns 
-    // else    go_forward(dist_to_goal);       // Go forward with small corrections on the angle       
-
-
-
-
-}
-
-
-    //     }
-    //     else if(robot_theta<0){
-       
-    // //if((std::abs(alpha-robot_theta) > 0.26) || (std::abs(2*M_PI-(alpha-robot_theta)) > 0.26)){
-    //         if(beta>0.18){
-    //             //Turn left
-    //             rotate_2(1);
-    //         }else if(beta < (-0.18)){
-    //             //turn left
-    //             rotate_2(2);
-    //         }else if(dist_to_goal>5){
-    //             go_forward(std::max(20.0,dist_to_goal));
-    //         }
-    //      }
-    //if(((alpha-robot_theta) > 0.26) || ((alpha-robot_theta) < -0.26)){
-    //    std::cout << "alpha:"<<alpha << ", theta:"<<robot_theta <<", ANGLE left: "<<(alpha-robot_theta)<< ", right: "<<  2*M_PI-(alpha-robot_theta) << std::endl;
-    //    if(std::abs(alpha-robot_theta) > std::abs(2*M_PI-robot_theta+alpha)){
-    //        //rotate(alpha-robot_theta);
-    //    }
-    //    else{
-    //        //rotate(2*M_PI-robot_theta+alpha);
-    //    }
-    //}
-    //else if (dist_to_goal>5){
-        //go_forward(std::max(50.0,dist_to_goal));
-    //}
-    //std::cout << "-----------middle -----------"<< std::endl;
-    //ros::spinOnce();
-    //std::cout << "-----------middle 2-----------"<< std::endl;
-    /*
-    if(object_seen){
-        move_to_object();
-    }*/
-    
-    //std::cout << "-----------end -----------"<< std::endl;
-
-
-void move_to_object()
-
-{
-
-    //rotate(angle_to_object);
-
-    //perhaps move a little close
-
-    //ask for determination - 
-}
-
-void rotate(int turn_direction){
-    geometry_msgs::Twist twist_msg;
-
-   //  double error_rot;
-
-   //  double Kp_rot = 2.5;
-   //  double Kd_rot = 0.5;
-   //  double Ki_rot = 0.08;
-
-   //  double proportional_rot=0.0;
-   //  double integral_rot=0.0;
-   //  double derivative_rot=0.0;
-
-   //  error_rot = -beta;
-
-   //  //PID controller to turn
-   //  proportional_rot = Kp_rot*error_rot;
-   //  integral_rot = integral_rot_Old + Ki_rot*error_rot;
-   //  derivative_rot = Kd_rot*(error_rot - errorOld_rot);
-
-   //  twist_msg.linear.x = 0.0;
-   //  twist_msg.angular.z = proportional_rot + integral_rot + derivative_rot;
-   //  if(twist_msg.angular.z > 4.0) twist_msg.angular.z = 4.0;
-   //  if(twist_msg.angular.z < -4.0) twist_msg.angular.z = -4.0;
-
-   // if(twist_msg.angular.z > 0.0) std::cout << "TURNING LEFT...."<< std::endl;
-   // if(twist_msg.angular.z < 0.0) std::cout << "TURNING RIGHT..."<< std::endl;
-
-   //  errorOld_rot = error_rot;
-   //  integral_rot_Old = integral_rot;
-
-   //  twist_pub.publish(twist_msg);
-
-
-    if (turn_direction==2)
-    {
-
-        if(beta>(2.5)){
-            twist_msg.angular.z = -2.5;
-        }else if(beta>(2.0)){
-            twist_msg.angular.z = -2.3;
-        }else if(beta>(1.5)){
-            twist_msg.angular.z = -2.1;
-        }else if(beta>(1.0)){
-            twist_msg.angular.z = -1.9;
-        }else if(beta>(0.8)){
-            twist_msg.angular.z = -1.8;
-        }else if(beta>(0.7)){
-            twist_msg.angular.z = -1.7;
-        }else if(beta>(0.6)){
-            twist_msg.angular.z = -1.6;
-        }else if(beta>(0.5)){
-            twist_msg.angular.z = -1.5;
-        }else if(beta>(0.4)){
-            twist_msg.angular.z = -1.4;
-        }else if(beta>(0.3)){
-            twist_msg.angular.z = -1.35;
-        }else if(beta>(0.25)){
-            twist_msg.angular.z = -1.3;
-        }else if(beta>(0.2)){
-            twist_msg.angular.z = -1.25;
-        }else if(beta>(0.15)){
-            twist_msg.angular.z = -1.2;
-        }else if(beta>(0.1)){
-            twist_msg.angular.z = -1.15;
+    if(std::fabs(alpha - robot_theta) < std::fabs(-2.0 * M_PI + alpha - robot_theta)){
+        if (std::fabs(alpha - robot_theta) < std::fabs(2.0 * M_PI + alpha - robot_theta)){
+        beta = alpha - robot_theta;
         }
-            //negativt är höger
-    }
-    else if (turn_direction==1)
-    {
-
-        if(beta<(-2.5)){
-            twist_msg.angular.z = 2.5;
-        }else if(beta<(-2.0)){
-            twist_msg.angular.z = 2.3;
-        }else if(beta<(-1.5)){
-            twist_msg.angular.z = 2.1;
-        }else if(beta<(-1.0)){
-            twist_msg.angular.z = 1.9;
-        }else if(beta<(-0.8)){
-            twist_msg.angular.z = 1.8;
-        }else if(beta<(-0.7)){
-            twist_msg.angular.z = 1.7;
-        }else if(beta<(-0.6)){
-            twist_msg.angular.z = 1.6;
-        }else if(beta<(-0.5)){
-            twist_msg.angular.z = 1.5;
-        }else if(beta<(-0.4)){
-            twist_msg.angular.z = 1.4;
-        }else if(beta<(-0.3)){
-            twist_msg.angular.z = 1.35;
-        }else if(beta<(-0.25)){
-            twist_msg.angular.z = 1.3;
-        }else if(beta<(-0.2)){
-            twist_msg.angular.z = 1.25;
-        }else if(beta<(-0.15)){
-            twist_msg.angular.z = 1.2;
-        }else if(beta<(-0.1)){
-            twist_msg.angular.z = 1.15;
+        else{
+            beta = 2.0 * M_PI + alpha - robot_theta;
         }
-
-        //vänster
     }
     else{
-        twist_msg.angular.z = 0.0;
+        beta = -2.0 * M_PI + alpha - robot_theta;
     }
 
+    
+    // std::cout << "Beta:"<< beta <<  std::endl;
+    // std::cout << "ABS(Beta):"<< fabs(beta) <<  std::endl;
 
-    //std::cout << "Turns: linear x: "<< twist_msg.linear.x << ", angular z: "<<twist_msg.angular.z<< std::endl;
-    //double start_time =ros::Time::now().toSec();
-    //while (ros::Time::now().toSec()-start_time<ROT_DURATION){
+    if (fabs(beta)>rotation_threshold)
+    {
+        rotate(); // Stops and aligns 
+    } 
+    else
+    {
+        if(flag_rotation){
 
-        
-    //}
-    std::cout << "Twist linear x: "<< twist_msg.linear.x << std::endl;
-    std::cout << "Twist angular z: "<< twist_msg.angular.z << std::endl;
-    twist_msg.linear.x = 0.0;
-    twist_pub.publish(twist_msg);
+            stop_robot_and_wait(3);
+            flag_rotation = false; //TODO: this is correct but can be confusing. If you want to remove this, think carefully.
+        }
+        go_forward(dist_to_goal);  
+    }    
 }
 
+void rotate(){
 
-// void rotate(double angle){
-//     geometry_msgs::Twist twist_msg;
-//     twist_msg.linear.x = 0.0;
-//     if (angle<0.1){
-//     twist_msg.angular.z = -3.0;}
-//     else if (angle>0.1){
-//         twist_msg.angular.z = 3.0;
-//     }
-//     else{
-//         twist_msg.angular.z = 0.0;
-//     }
-//     std::cout << "Turns: linear x: "<< twist_msg.linear.x << ", angular z: "<<twist_msg.angular.z<< std::endl;
-//     // double start_time =ros::Time::now().toSec();
-//     // while (ros::Time::now().toSec()-start_time<ROT_DURATION){
-  //   twist_pub.publish(twist_msg);
-// // }
+    //Set some stuff true or false
+    flag_moving_forward = false;
+    if(!flag_rotation){ //This is set to true below
+        integral_rot = 0.0;
+        integral_lin = 0.0;
+        errorOld_rot = beta;
+    }
 
-//     // twist_msg.angular.z = 0.0;
-//     //twist_pub.publish(twist_msg);
-// }
-
-void go_forward(double distance)
-{
     geometry_msgs::Twist twist_msg;
 
-    // double error_lin;
-    // double error_rot;
+    double error_rot;
 
-    // double Kp_l = 1.0;
-    // double Kd_l = 0.08;
-    // double Ki_l = 0.05;
-    // double Kp_rot = 3.9;
-    // double Kd_rot = 0.7;
-    // double Ki_rot = 0.08;
+    double proportional_rot = 0.0;
+    double derivative_rot = 0.0;
 
-    // double proportional_lin = 0.0;
-    // double integral_lin=0.0;
-    // double derivative_lin=0.0;
-    // double proportional_rot=0.0;
-    // double integral_rot=0.0;
-    // double derivative_rot=0.0;
+    error_rot = beta;
 
-    // error_lin= distance;
-    // error_rot = -beta;
+    double now = ros::Time::now().toSec();
+    if (flag_rotation){
 
-    // //PID controller to go forward
-    // proportional_lin = Kp_l*error_lin;
-    // integral_lin = integral_lin_Old + Ki_l*error_lin;
-    // derivative_lin = Kd_l*(error_lin - errorOld_lin);
-    // //PID controller to align
-    // proportional_rot = Kp_rot*error_rot;
-    // integral_rot = integral_rot_Old + Ki_rot*error_rot;
-    // derivative_rot = Kd_rot*(error_rot - errorOld_rot);
+        double dt = now - lastTime;
+        integral_rot += error_rot*dt;
+        derivative_rot = (error_rot - errorOld_rot)/dt;
+        //Anti windup:
+        if(std::fabs(integral_rot)>4.0){
+            integral_rot = sign(integral_rot)*4.0;
+        }
 
-    // twist_msg.linear.x = proportional_lin + integral_lin + derivative_lin;
-    // if (twist_msg.linear.x>0.35) twist_msg.linear.x = 0.35;
-
-    // twist_msg.angular.z = proportional_rot + integral_rot + derivative_rot;
-    // if(twist_msg.angular.z > 4.0) twist_msg.angular.z = 4.0;
-    // if(twist_msg.angular.z < -4.0) twist_msg.angular.z = -4.0;
-
-    // errorOld_lin = error_lin;
-    // integral_lin_Old = integral_lin;
-    // errorOld_rot = error_rot;
-    // integral_rot_Old = integral_rot;
-
-    // std::cout << "GOING FORWARD...."<< std::endl;
-
-    
-
-
-
-
-    if(distance >0.4){
-        twist_msg.linear.x = 0.30;
-    }else if(distance >0.3){
-        twist_msg.linear.x = 0.25;
-    }else if(distance >0.2){
-        twist_msg.linear.x = 0.22;
-    }else if(distance >0.15){
-        twist_msg.linear.x = 0.20;
-    }else if(distance >0.10){
-        twist_msg.linear.x = 0.18;
-    }else if(distance >0.08){
-        twist_msg.linear.x = 0.16;
-    }else if(distance >0.05){
-        twist_msg.linear.x = 0.15;
-    }else if(distance >0.0){
-        twist_msg.linear.x = 0.10;
     }
-    twist_msg.angular.z =0.0;
-    std::cout << "Twist linear x: "<< twist_msg.linear.x << std::endl;
-    std::cout << "Twist angular z: "<< twist_msg.angular.z << std::endl;
+    flag_rotation = true;  
+
+    //PID controller to turn
+    proportional_rot = error_rot;
+
+    twist_msg.linear.x = 0.0;
+    twist_msg.angular.z = Kp_rot*proportional_rot + Ki_rot*integral_rot + Kd_rot*derivative_rot;
+    if(twist_msg.angular.z > 5.0) twist_msg.angular.z = 5.0;
+    if(twist_msg.angular.z < -5.0) twist_msg.angular.z = -5.0;
+
+  // if(twist_msg.angular.z > 0.0) std::cout << "TURNING LEFT....  beta: "<< beta << ", alpha: "<< alpha << ", theta: " << robot_theta << std::endl;
+  // if(twist_msg.angular.z < 0.0) std::cout << "TURNING RIGHT...  beta: "<< beta << ", alpha: "<< alpha << ", theta: " << robot_theta << std::endl;
+    // std::cout << "integral " << integral_rot  << std::endl;
+
+    errorOld_rot = error_rot;
+
     twist_pub.publish(twist_msg);
-
-    //std::cout << "Forward: linear x: "<< twist_msg.linear.x << ", angular z: "<<twist_msg.angular.z<< std::endl;
-    
-   // double start_time =ros::Time::now().toSec();
-    //while (ros::Time::now().toSec()-start_time<FORWARD_DURATION){
-    
-     //}
-
-    //twist_msg.linear.x = 0.0;
-    //twist_pub.publish(twist_msg);
 }
 
 
 
 
-void object_detected_function(ras_msgs::Object_id msg)
+void go_forward(double distance)
+{   
+    //Set some stuff true or false
+    flag_rotation = false;
+    if(!flag_moving_forward){ //This is set to true below
+        integral_rot = 0.0;
+        integral_lin = 0.0;
+        errorOld_lin = distance;
+        errorOld_rot = beta;
+    }
+
+    geometry_msgs::Twist twist_msg;
+
+    double error_lin;
+    double error_rot;
+
+
+
+    double proportional_lin = 0.0;
+    double derivative_lin=0.0;
+    double proportional_rot=0.0;
+    double derivative_rot=0.0;
+
+    error_lin = distance;
+    error_rot = beta;
+
+    //To be able to control with pid
+    double now = ros::Time::now().toSec();
+    if (flag_moving_forward){
+        
+        double dt = now - lastTime;
+
+        integral_rot = integral_rot + error_rot*dt;
+        derivative_rot = (error_rot - errorOld_rot)/dt;
+
+        integral_lin = integral_lin + error_lin*dt;
+        derivative_lin = (error_lin - errorOld_lin)/dt;
+            //Anti windup:
+        if(std::fabs(integral_rot)>4.0){
+            integral_rot = sign(integral_rot)*4.0;
+        }
+        if(std::fabs(integral_lin)>4.0){
+            integral_lin = sign(integral_lin)*4.0;
+        }
+
+
+    }
+    lastTime = now;
+    flag_moving_forward = true;  
+
+    //PID controller to go forward
+    proportional_lin = error_lin;
+    
+    //PID controller to align
+    proportional_rot = error_rot;
+    
+    twist_msg.linear.x = Kp_l*proportional_lin + Ki_l*integral_lin + Kd_l*derivative_lin;
+    if (twist_msg.linear.x>0.4) twist_msg.linear.x = 0.4;
+    if (twist_msg.linear.x<0.1) twist_msg.linear.x = 0.1;
+
+    twist_msg.angular.z = Kp_rot*proportional_rot + Ki_rot*integral_rot + Kd_rot*derivative_rot;
+    if(twist_msg.angular.z > 3.0) twist_msg.angular.z = 3.0;
+    if(twist_msg.angular.z < -3.0) twist_msg.angular.z = -3.0;
+
+    errorOld_lin = error_lin;
+    errorOld_rot = error_rot;
+
+   // std::cout << "GOING FORWARD....  beta: "<< beta << ", alpha: "<< alpha << ", theta: " << robot_theta << std::endl;
+
+    twist_pub.publish(twist_msg);
+
+}
+
+void object_classified_callback(ras_msgs::Object_id msg){
+     object_to_classify = msg;
+     flag_object_detected = true;
+}
+
+
+
+
+
+void classify_object()
 {
-    current_object_id = msg;
+    //if (!flag_object_detected) return; //TODO: maybe do this.
+    //if(!new_object_detected(object_to_classify.x,object_to_classify.y)) return;
+    
+    std::cout << "got message from akash"<< std::endl;
+    //double x = (robot_x + object_to_classify.x*cos(robot_theta) - object_to_classify.y*sin(robot_theta));
+    //double y = (robot_y + object_to_classify.x*sin(robot_theta) + object_to_classify.y*cos(robot_theta));
 
-    x = (robot_x + current_object_id.x*cos(robot_theta));
-    y = (robot_y + current_object_id.y*sin(robot_theta));
+    double x = (robot_x + closest_object.x*cos(robot_theta) - closest_object.y*sin(robot_theta));
+    double y = (robot_y + closest_object.x*sin(robot_theta) + closest_object.y*cos(robot_theta));
 
-    if(current_object_id.object==200){
+    //TODO: if old thing at this position, don't do anthing.
+
+    if(object_to_classify.object==200){
       // Here it is debris
 
 
     }
-    else if(current_object_id.object==100){
-        //If not already recognized at this position:
-            object_seen = true;
-            angle_to_object = atan2(current_object_id.y,current_object_id.x);
+    //else if(object_to_classify.object==100){ //unknown}
 
-    }
     else{
         marker_object.color.a = 1.0; // Don't forget to set the alpha!
         marker_object.header.frame_id = "/map";
@@ -514,63 +447,63 @@ void object_detected_function(ras_msgs::Object_id msg)
         marker_object.pose.orientation.y = 0;
         marker_object.pose.orientation.z = 0;
         marker_object.pose.orientation.w = 1.0;
-        if(current_object_id.shape ==2){// Blue Cube
+        if(object_to_classify.shape ==2){// Blue Cube
             marker_object.type = visualization_msgs::Marker::CUBE;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 0.0;
             marker_object.color.g = 0.0;
             marker_object.color.b = 1.0;
         }
-        if(current_object_id.shape ==3){// Green Cube
+        if(object_to_classify.shape ==3){// Green Cube
             marker_object.type = visualization_msgs::Marker::CUBE;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 0.0;
             marker_object.color.g = 1.0;
             marker_object.color.b = 0.0;
         }
-        if(current_object_id.shape ==4){// Yellow cube
+        if(object_to_classify.shape ==4){// Yellow cube
             marker_object.type = visualization_msgs::Marker::CUBE;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 1.0;
             marker_object.color.g = 1.0;
             marker_object.color.b = 0.0;
         }
-        if(current_object_id.shape ==5){// yellow Ball
+        if(object_to_classify.shape ==5){// yellow Ball
             marker_object.type = visualization_msgs::Marker::SPHERE;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 1.0;
             marker_object.color.g = 1.0;
             marker_object.color.b = 0.0;
         }
-        if(current_object_id.shape ==6){// red ball
+        if(object_to_classify.shape ==6){// red ball
             marker_object.type = visualization_msgs::Marker::SPHERE;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 1.0;
             marker_object.color.g = 0.0;
             marker_object.color.b = 0.0;
         }
-        if(current_object_id.shape ==7){// green cylinder
+        if(object_to_classify.shape ==7){// green cylinder
             marker_object.type = visualization_msgs::Marker::CYLINDER;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 0.0;
             marker_object.color.g = 1.0;
             marker_object.color.b = 0.0;
         }
-        if(current_object_id.shape ==8){// blue triangle
+        if(object_to_classify.shape ==8){// blue triangle
             marker_object.type = visualization_msgs::Marker::LINE_LIST;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 1.0;
             marker_object.color.g = 0.0;
             marker_object.color.b = 1.0;
         }
-        if(current_object_id.shape ==9){//purple cross
+        if(object_to_classify.shape ==9){//purple cross
             marker_object.type = visualization_msgs::Marker::LINE_LIST;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 0.5;
             marker_object.color.g = 0.2;
             marker_object.color.b = 1.0;
         }
-        if(current_object_id.shape ==10){// orange star aka patric
+        if(object_to_classify.shape ==10){// orange star aka patric
             marker_object.type = visualization_msgs::Marker::LINE_LIST;
             marker_object.action = visualization_msgs::Marker::ADD;
             marker_object.color.r = 1.0;
@@ -580,11 +513,11 @@ void object_detected_function(ras_msgs::Object_id msg)
 
 
 
-    //marker_object.header.stamp = current_object_id.time;
+    //marker_object.header.stamp = object_to_classify.time;
     marker_object.header.stamp = ros::Time::now();
     marker_object.id = object_counter;
-    marker_object.pose.position.x = y;
-    marker_object.pose.position.y = x;
+    marker_object.pose.position.x = x;
+    marker_object.pose.position.y = y;
     
 
     object_pos_to_cost_map.header.stamp = ros::Time::now();  
@@ -602,21 +535,108 @@ void object_detected_function(ras_msgs::Object_id msg)
     }
 
 
+}
+
+
+void object_detected_callback(ras_msgs::Shape msg){
+    closest_object.x = msg.x;
+    closest_object.y = msg.y;
+    flag_has_detected = true;
+}
+
+
+
+
+void stop_robot_and_wait(int time_wait){
+    std::cout << "waiting for " <<  time_wait << std::endl;
+    geometry_msgs::Twist twist_msg;
+    twist_msg.linear.x = 0.0;
+    twist_msg.angular.z = 0.0;
+    twist_pub.publish(twist_msg);
+    //wait a little bit (1 second right now)
+
+    ros::Rate loop_rate(control_frequency);
+    int counter = 0;
+    while(counter<time_wait)
+    {
+        loop_rate.sleep();
+        counter++;
+        ros::spinOnce();
     }
+    
 
-void current_robot_position_function(localization::Position msg)    //meters
+}
+
+bool check_if_object_is_close(double x,double y){
+   double angle_derp = atan2(y,x);
+    std::cout << sqrt(x*x + y*y) << std::endl;
+    if(sqrt(x*x + y*y)<=0.4 && std::fabs(angle_derp)<0.6 ){
+        return true;
+    }else{
+        return false;
+    }
+}
+
+
+//Returns true if we believe that this is a new object
+bool new_object_detected(double x,double y){
+    std::cout << "new object detected?" << std::endl;
+
+    //If the object is close enought and within some angle
+    //x, y local coordinates
+
+    double x_global = robot_x + x*cos(robot_theta) - y*sin(robot_theta);
+    double y_global = robot_y + x*sin(robot_theta) + y*cos(robot_theta);
+    for(int i=0; i<marker_object_vec.markers.size(); i++)
+    {
+        double marker_x = marker_object_vec.markers[i].pose.position.x;
+        double marker_y = marker_object_vec.markers[i].pose.position.y;
+
+        //std::cout << "here " << i << std::endl;
+
+        double dist = sqrt((marker_x - x_global)*(marker_x - x_global) + (marker_y - y_global)*(marker_y - y_global));
+        std::cout << "object is on distance: "<< dist << std::endl;
+        if (dist<=object_vicinity_threshold){
+            return false;
+
+        }
+
+    }
+    return true;
+    
+}
+
+
+void stop_and_classify_object(){
+    std::cout << "classifying" << std::endl;
+    flag_object_detected = false;
+    stop_robot_and_wait(100);
+    classify_object();
+
+
+
+}
+
+void localization_callback(localization::Position msg)    //meters
 {
-   robot_x=msg.x;
-   robot_y=msg.y;
-   robot_theta=msg.theta;
+    robot_x=msg.x;
+    robot_y=msg.y;
+    robot_theta=msg.theta;
 
-   pos_received = true;
+    double time_to_consider = msg.time;
+    for (int i=0; i<times_to_save;i++){
+        if (timestamp_vec[i].time>time_to_consider){
+            robot_theta += timestamp_vec[i].delta_rot;
+            robot_x += timestamp_vec[i].delta_trans*cos(robot_theta);
+            robot_y += timestamp_vec[i].delta_trans*sin(robot_theta);
+        }
+    }
+    pos_received = true;
 }
 
 
 private:
 
- bool object_seen;
 
  int rows;
  int col; 
@@ -626,8 +646,6 @@ private:
  double beta;
  double xEnd;
  double xStep;
- double x;
- double y;
  double angle_to_object;
  double newx, newy;
  double robot_x;
@@ -636,47 +654,133 @@ private:
 };
 
 
+
+
+bool setup(ros::NodeHandle nh){
+    if (!nh.hasParam("/has_parameters")){
+        return false;
+    }
+
+    nh.getParam("/control_Kp_rot_rot", Kp_rot_rot);
+    nh.getParam("/control_Ki_rot_rot", Ki_rot_rot);
+    nh.getParam("/control_Kd_rot_rot", Kd_rot_rot);
+
+    nh.getParam("/control_Kp_l", Kp_l);
+    nh.getParam("/control_Ki_l", Ki_l);
+    nh.getParam("/control_Kd_l", Kd_l);
+
+    nh.getParam("/control_Kp_rot", Kp_rot);
+    nh.getParam("/control_Ki_rot", Ki_rot);
+    nh.getParam("/control_Kd_rot", Kd_rot);
+
+    nh.getParam("/node_vicinity_threshold", node_vicinity_threshold);
+    nh.getParam("/rotation_threshold", rotation_threshold);
+    
+
+
+    return true;
+}
+
+
 int main(int argc, char **argv)
 {
+
+    std::cout << "starting burainuuuu" << std::endl;
+    int timer = 0;
+    bool time_ran_out = false;
+
+    
     ros::init(argc, argv, "brain_node");
     BrainNode brain_node;
-   
 
-    // Control @ 10 Hz
-    double control_frequency = 10.0;  
+    if(!setup(brain_node.n)){
+        std::cout << "phukk yooooo" << std::endl;
+        return 1; //Error, no parameters
+    }
+        
     ros::Rate loop_rate(control_frequency);
 
     
     while(brain_node.n.ok())
-    {   
-        if(brain_node.got_path==true && brain_node.pos_received)
+    {
+        if(!time_ran_out)
         {
-             // std::cout << "-----------here 1 -----------"<< std::endl;
-
-            if (brain_node.check_at_correct_place())  
-            {
-                std::cout << "-----------here 2 -----------"<< std::endl;
-                brain_node.get_next_path();
+            if (flag_has_detected  && brain_node.check_if_object_is_close(closest_object.x,closest_object.y) && brain_node.new_object_detected(closest_object.x,closest_object.y)){
+                brain_node.stop_and_classify_object(); //This will do ros spin withing a loop so it doesn't return immediately
+                flag_has_detected = false;
+                //continue;
+            }else{
+                closest_object.x = -500.0;
+                closest_object.y = -500.0;
             }
 
-            if(!final_node)
+            if(brain_node.got_path==true && brain_node.pos_received)
             {
-                // std::cout << "-----------here 3 -----------"<< std::endl;
-                brain_node.move_function();
-            }else
+                if (brain_node.check_at_correct_place())  
+                {
+                    std::cout << "----------GO TO NEXT NODE-----------"<< std::endl;
+                    brain_node.stop_robot_and_wait(5); //This will do ros spin withing a loop so it doesn't return immediately
+                    brain_node.get_next_path();
+
+                }
+
+                if(!final_node)
+                {
+                    brain_node.move_function();
+
+                }else
+                {
+                    brain_node.got_path = false;
+                    final_node=false;
+                    // Ask for new path
+                    std_msgs::Int32 request_path_message_herp_derp;
+                    request_path_message_herp_derp.data = 1;
+                    brain_node.request_pub_.publish(request_path_message_herp_derp);
+
+                }  
+            }            
+        }else
+        {  
+             if(brain_node.got_path==true && brain_node.pos_received)
             {
-                brain_node.got_path = false;
-                // Ask for new path
-            }   
+                if (brain_node.check_at_correct_place())  
+                {
+                    std::cout << "----------GO TO NEXT NODE-----------"<< std::endl;
+                    brain_node.stop_robot_and_wait(5); //This will do ros spin withing a loop so it doesn't return immediately
+                    brain_node.get_next_path();
+                }
+
+                brain_node.move_function(); 
+            }            
+
         }
+
+
+
+
+        timer++;
+        if(timer == 6300) //3min30
+        {
+            time_ran_out = true;
+            brain_node.stop_robot_and_wait(5);
+            // Time to go home
+            std_msgs::Int32 request_back_path;
+            request_back_path.data = 1;
+            brain_node.request_back_path_pub.publish(request_back_path);
+            // Ask for new path
+            std_msgs::Int32 request_path_message_herp_derp;
+            request_path_message_herp_derp.data = 1;
+            brain_node.request_pub_.publish(request_path_message_herp_derp);
+
+        }
+            
+
 
 
         ros::spinOnce();
         loop_rate.sleep();
      }
 
+     std::cout << "WATTAFAKK MAAAEEEEEEN" << std::endl;
     return 0;
 }
-
-
-           // std::cout << "-----------here 1 -----------"<< std::endl;
