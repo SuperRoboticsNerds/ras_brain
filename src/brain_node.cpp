@@ -34,6 +34,7 @@
 #include "tf/transform_listener.h"
 #include "tf/message_filter.h"
 #include "message_filters/subscriber.h"
+#include "std_msgs/String.h"
 
 //#define ROT_DURATION  0.2
 #define FORWARD_DURATION  0.3
@@ -112,6 +113,7 @@ public:
 
     nav_msgs::OccupancyGrid grid_cost;
     nav_msgs::OccupancyGrid grid_obs;
+    std_msgs::String message_voice;
 
    // ras_msgs::Object_id object_to_classify;
 
@@ -141,6 +143,7 @@ public:
     ros::Publisher request_back_path_pub;
     ros::Publisher twist_pub;
     ros::Publisher robot_pos_pub;
+    ros::Publisher speech_pub;
 
     BrainNode()
     {
@@ -166,6 +169,8 @@ public:
         marker_object_pub = n.advertise<visualization_msgs::MarkerArray>( "/object_marker_to_rvis", 10);
         object_pos_pub= n.advertise<geometry_msgs::PointStamped>( "/object_pos", 10);
         robot_pos_pub = n.advertise<localization::Position>("/brain_position",10);
+        speech_pub = n.advertise<std_msgs::String>("/espeak/string", 1);
+
     }
     ~BrainNode()
     {
@@ -637,7 +642,10 @@ bool new_object_detected(double x,double y){
 void stop_and_classify_object(){
     std::cout << "classifying" << std::endl;
     flag_object_detected = false;
-    stop_robot_and_wait(100);
+    message_voice.data = "object detected"; 
+    speech_pub.publish(message_voice);
+
+    stop_robot_and_wait(60);
     classify_object();
 
 }
