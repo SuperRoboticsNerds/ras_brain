@@ -36,3 +36,6 @@ add_executable(brain_node src/brain_node.cpp)
 target_link_libraries(brain_node  ${catkin_LIBRARIES})
 
 add_dependencies(brain_node  brain_msgs_generate_messages_cpp)
+
+add_executable(kidnapped_brain_node src/kidnapped_brain_node.cpp)
+target_link_libraries(kidnapped_brain_node  ${catkin_LIBRARIES})
