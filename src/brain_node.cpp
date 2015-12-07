@@ -390,7 +390,7 @@ void go_forward(double distance)
     proportional_rot = error_rot;
     
     twist_msg.linear.x = Kp_l*proportional_lin + Ki_l*integral_lin + Kd_l*derivative_lin;
-    if (twist_msg.linear.x>0.4) twist_msg.linear.x = 0.3;//0.4 was good
+    if (twist_msg.linear.x>0.4) twist_msg.linear.x = 0.4;//0.4 was good
     if (twist_msg.linear.x<0.1) twist_msg.linear.x = 0.1;
 
     twist_msg.angular.z = Kp_rot*proportional_rot + Ki_rot*integral_rot + Kd_rot*derivative_rot;
@@ -420,7 +420,7 @@ void classify_object()
     //if (!flag_object_detected) return; //TODO: maybe do this.
     //if(!new_object_detected(object_to_classify.x,object_to_classify.y)) return;
     
-    std::cout << "got message from akash"<< std::endl;
+    std::cout << "Got message from Vision"<< std::endl;
     //double x = (robot_x + object_to_classify.x*cos(robot_theta) - object_to_classify.y*sin(robot_theta));
     //double y = (robot_y + object_to_classify.x*sin(robot_theta) + object_to_classify.y*cos(robot_theta));
 
@@ -558,7 +558,7 @@ void classify_object()
     marker_object_vec.markers.push_back(marker_object);
 
     marker_object_pub.publish(marker_object_vec);
-    object_pos_pub.publish(object_pos_to_cost_map);
+    //object_pos_pub.publish(object_pos_to_cost_map);
 
     object_counter++;
     
@@ -577,7 +577,6 @@ void object_detected_callback(ras_msgs::Shape msg){
 
 
 void stop_robot_and_wait(int time_wait){
-    std::cout << "waiting for " <<  time_wait << std::endl;
     geometry_msgs::Twist twist_msg;
     twist_msg.linear.x = 0.0;
     twist_msg.angular.z = 0.0;
@@ -598,7 +597,6 @@ void stop_robot_and_wait(int time_wait){
 
 bool check_if_object_is_close(double x,double y){
    double angle_derp = atan2(y,x);
-    std::cout << sqrt(x*x + y*y) << std::endl;
     if(sqrt(x*x + y*y)<=0.4 && std::fabs(angle_derp)<0.6 ){
         return true;
     }else{
@@ -641,8 +639,6 @@ void stop_and_classify_object(){
     flag_object_detected = false;
     stop_robot_and_wait(100);
     classify_object();
-
-
 
 }
 
@@ -713,17 +709,14 @@ bool setup(ros::NodeHandle nh){
 
 int main(int argc, char **argv)
 {
-
-    std::cout << "starting burainuuuu" << std::endl;
     int timer = 0;
     bool time_ran_out = false;
-
     
     ros::init(argc, argv, "brain_node");
     BrainNode brain_node;
 
-    if(!setup(brain_node.n)){
-        std::cout << "phukk yooooo" << std::endl;
+    if(!setup(brain_node.n))
+    {
         return 1; //Error, no parameters
     }
         
@@ -784,9 +777,6 @@ int main(int argc, char **argv)
 
         }
 
-
-
-
         timer++;
         if(timer == 6300) //3min30
         {
@@ -810,6 +800,5 @@ int main(int argc, char **argv)
         loop_rate.sleep();
      }
 
-     std::cout << "WATTAFAKK MAAAEEEEEEN" << std::endl;
     return 0;
 }

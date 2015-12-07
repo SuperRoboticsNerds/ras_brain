@@ -621,7 +621,7 @@ void figure_out_position_maybe(int time_wait){
     std::cout << "waiting for " <<  time_wait << std::endl;
     geometry_msgs::Twist twist_msg;
     twist_msg.linear.x = 0.0;
-    twist_msg.angular.z = 3.0;
+    twist_msg.angular.z = 1.0;
     twist_pub.publish(twist_msg);
 
     ros::Rate loop_rate(control_frequency);
@@ -629,18 +629,20 @@ void figure_out_position_maybe(int time_wait){
     while(counter<time_wait)
     {
         loop_rate.sleep();
+            twist_pub.publish(twist_msg);
+
         counter++;
         ros::spinOnce();
     }
 
-    twist_msg.angular.z = 3.0;
+    twist_msg.angular.z = 0.0;
     twist_pub.publish(twist_msg);
 
     std_msgs::Int32 request_path_message_herp_derp;
     request_path_message_herp_derp.data = 1;
     request_pub_.publish(request_path_message_herp_derp);
 
-    stop_robot_and_wait(30); //TODO: maybe request a new path or something I don't know.
+    stop_robot_and_wait(90); //TODO: maybe request a new path or something I don't know.
 
 }
 
@@ -731,7 +733,7 @@ int main(int argc, char **argv)
     ros::Rate loop_rate(control_frequency);
 
 
-    brain_node.figure_out_position_maybe(300); //10 seconds
+    brain_node.figure_out_position_maybe(1800); //6063634534 seconds
 
 
     
