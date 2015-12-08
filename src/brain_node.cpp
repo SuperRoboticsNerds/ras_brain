@@ -18,6 +18,7 @@
 #include "nav_msgs/GridCells.h"
 #include "ras_arduino_msgs/PWM.h"
 #include "ras_arduino_msgs/Encoders.h"
+#include "ras_arduino_msgs/ADConverter.h"
 #include "geometry_msgs/Point.h"
 #include "geometry_msgs/PointStamped.h"
 #include "geometry_msgs/PoseArray.h"
@@ -41,7 +42,7 @@
 
 
 const int times_to_save = 50;
-const double object_vicinity_threshold = 0.1;
+const double object_vicinity_threshold = 0.2;
 
 
 
@@ -70,6 +71,10 @@ double control_frequency = 30.0;
 double alpha;
 double lastTime;
 
+double bumper_infos1[4];
+double bumper_infos2[4];
+int bumper_infos_index = 0;
+
 
 bool flag_has_detected = false;
 
@@ -97,10 +102,19 @@ double sign(double val) {
     return double((0.0 < val) - (val < 0.0));
 }
 
+void fill_bumper_infos(){
+    for(int i=0;i<4;i++){
+        bumper_infos1[i] = 0;
+        bumper_infos2[i] = 1024;
+    }
+}
+
 
 class BrainNode
 {
 public:
+
+    int path_node_index;
 
     std::vector< std::vector<grid_generator::Grid_map_struct> > matrix_a;
     std::vector<grid_generator::Grid_map_struct> grid_map_send;
@@ -118,7 +132,7 @@ public:
    // ras_msgs::Object_id object_to_classify;
 
     geometry_msgs::Point Path[];
-    geometry_msgs::PointStamped object_pos_to_cost_map;
+    
 
     visualization_msgs::Marker marker_object;
     visualization_msgs::MarkerArray marker_object_vec;
@@ -130,12 +144,14 @@ public:
     bool pos_received ;
 
     ros::NodeHandle n;
+    int object_counter;
 
     ros::Subscriber object_classified_sub_;
     ros::Subscriber object_detected_sub;
     ros::Subscriber robot_pos_sub_;
     ros::Subscriber path_sub;
     ros::Subscriber odom_sub;
+    ros::Subscriber bumper_sub;
 
     ros::Publisher marker_object_pub;
     ros::Publisher object_pos_pub;
@@ -144,6 +160,10 @@ public:
     ros::Publisher twist_pub;
     ros::Publisher robot_pos_pub;
     ros::Publisher speech_pub;
+
+     double robot_x;
+ double robot_y;
+ double robot_theta;
 
     BrainNode()
     {
@@ -162,6 +182,7 @@ public:
         object_detected_sub = n.subscribe<ras_msgs::Shape>("/object/shape",10,&BrainNode::object_detected_callback,this);
         robot_pos_sub_ = n.subscribe<localization::Position>("/position",10,&BrainNode::localization_callback,this);
         odom_sub = n.subscribe<motors::odometry>("/odometry",10,&BrainNode::odom_callback,this);
+        bumper_sub = n.subscribe<ras_arduino_msgs::ADConverter>("/arduino/adc",10,&BrainNode::bumper_callback,this);
         
         request_pub_ = n.advertise<std_msgs::Int32>("/grid_generator/update_query", 10);
         request_back_path_pub = n.advertise<std_msgs::Int32>("/go_home", 10);
@@ -239,13 +260,9 @@ void get_next_path()
 }
 
 bool check_at_correct_place()
-{
-    
-    
+{   
     if((fabs(robot_x - newx) < node_vicinity_threshold) && (fabs(robot_y - newy) < node_vicinity_threshold))  return true;
     else return false;
-
-
 }
 
 void move_function()
@@ -336,7 +353,29 @@ void rotate(){
 }
 
 
+void bumper_callback(ras_arduino_msgs::ADConverter msg){
+    bumper_infos1[bumper_infos_index] = (double)msg.ch5;
+    bumper_infos2[bumper_infos_index] = (double)msg.ch6;
+    bumper_infos_index += 1;
+    if (bumper_infos_index>=4){
+        bumper_infos_index = 0;
+    }
+}
 
+bool bumpers_hit_test(){
+    double mean1 = 0.0;
+    double mean2 = 0.0;
+    for (int i=0;i < 4; i++){
+        mean1 += bumper_infos1[i];
+        mean2 += bumper_infos2[i];
+    }
+    mean1 = mean1/4.0;
+    mean2 = mean2/4.0;
+    if(mean1 > 1000.0 || mean2 < 1000.0){
+        return true;
+    }
+    return false;
+}
 
 void go_forward(double distance)
 {   
@@ -395,7 +434,7 @@ void go_forward(double distance)
     proportional_rot = error_rot;
     
     twist_msg.linear.x = Kp_l*proportional_lin + Ki_l*integral_lin + Kd_l*derivative_lin;
-    if (twist_msg.linear.x>0.4) twist_msg.linear.x = 0.4;//0.4 was good
+    if (twist_msg.linear.x>0.3) twist_msg.linear.x = 0.3;//0.4 was good
     if (twist_msg.linear.x<0.1) twist_msg.linear.x = 0.1;
 
     twist_msg.angular.z = Kp_rot*proportional_rot + Ki_rot*integral_rot + Kd_rot*derivative_rot;
@@ -434,7 +473,7 @@ void classify_object()
 
     //TODO: if old thing at this position, don't do anthing.
 
-
+geometry_msgs::PointStamped object_pos_to_cost_map;
     //else if(object_to_classify.object==100){ //unknown}
 
 
@@ -455,6 +494,7 @@ void classify_object()
             marker_object.color.g = 0.0;
             marker_object.color.b = 0.0;
             std::cout<<" Red Cube "<<std::endl;
+            message_voice.data = "I see a red cube.";
         }
         if(object_to_classify.object==2){// Blue Cube
             marker_object.type = visualization_msgs::Marker::CUBE;
@@ -463,6 +503,7 @@ void classify_object()
             marker_object.color.g = 0.0;
             marker_object.color.b = 1.0;
             std::cout<<" Blue Cube "<<std::endl;
+            message_voice.data = "I see a blue cube.";
         }
         if(object_to_classify.object ==3){// Green Cube
             marker_object.type = visualization_msgs::Marker::CUBE;
@@ -471,6 +512,7 @@ void classify_object()
             marker_object.color.g = 1.0;
             marker_object.color.b = 0.0;
             std::cout<<" Green Cube "<<std::endl;
+            message_voice.data = "I see a green cube.";
         }
         if(object_to_classify.object ==4){// Yellow cube
             marker_object.type = visualization_msgs::Marker::CUBE;
@@ -479,6 +521,7 @@ void classify_object()
             marker_object.color.g = 1.0;
             marker_object.color.b = 0.0;
             std::cout<<" Yellow cube "<<std::endl;
+            message_voice.data = "I see a yellow cube.";
         }
         if(object_to_classify.object ==5){// yellow Ball
             marker_object.type = visualization_msgs::Marker::SPHERE;
@@ -487,6 +530,7 @@ void classify_object()
             marker_object.color.g = 1.0;
             marker_object.color.b = 0.0;
             std::cout<<" yellow Ball "<<std::endl;
+            message_voice.data = "I see a yellow ball.";
         }
         if(object_to_classify.object==6){// red ball
             marker_object.type = visualization_msgs::Marker::SPHERE;
@@ -495,6 +539,7 @@ void classify_object()
             marker_object.color.g = 0.0;
             marker_object.color.b = 0.0;
             std::cout<<" Red ball "<<std::endl;
+            message_voice.data = "I see a red ball.";
         }
         if(object_to_classify.object ==7){// green cylinder
             marker_object.type = visualization_msgs::Marker::CYLINDER;
@@ -503,6 +548,7 @@ void classify_object()
             marker_object.color.g = 1.0;
             marker_object.color.b = 0.0;
             std::cout<<" Green cylinder "<<std::endl;
+            message_voice.data = "I see a green cylinder.";
         }
         if(object_to_classify.object ==8){// blue triangle
             marker_object.type = visualization_msgs::Marker::LINE_LIST;
@@ -511,6 +557,7 @@ void classify_object()
             marker_object.color.g = 0.0;
             marker_object.color.b = 1.0;
             std::cout<<" Blue triangle "<<std::endl;
+            message_voice.data = "I see a blue triangle.";
         }
         if(object_to_classify.object ==9){//purple cross
             marker_object.type = visualization_msgs::Marker::LINE_LIST;
@@ -519,6 +566,7 @@ void classify_object()
             marker_object.color.g = 0.2;
             marker_object.color.b = 1.0;
             std::cout<<" Purple cross "<<std::endl;
+            message_voice.data = "I see a purple cross.";
         }
         if(object_to_classify.object ==10){// orange star aka patric
             marker_object.type = visualization_msgs::Marker::LINE_LIST;
@@ -527,6 +575,7 @@ void classify_object()
             marker_object.color.g = 0.4;
             marker_object.color.b = 0.0;
             std::cout<<" Orange star "<<std::endl;
+            message_voice.data = "I see patric";
         }
          if(object_to_classify.object ==11){//purple star
             marker_object.type = visualization_msgs::Marker::LINE_LIST;
@@ -535,6 +584,7 @@ void classify_object()
             marker_object.color.g = 0.2;
             marker_object.color.b = 1.0;
             std::cout<<" Purple star "<<std::endl;
+            message_voice.data = "I see a purple star.";
         }
         if(object_to_classify.object ==12){//red hollow cube
             marker_object.type = visualization_msgs::Marker::LINE_LIST;
@@ -543,6 +593,7 @@ void classify_object()
             marker_object.color.g = 0.0;
             marker_object.color.b = 0.0;
             std::cout<<" Red hollow cube "<<std::endl;
+            message_voice.data = "I see a red hollow cube.";
         }
 
 
@@ -563,6 +614,7 @@ void classify_object()
     marker_object_vec.markers.push_back(marker_object);
 
     marker_object_pub.publish(marker_object_vec);
+    speech_pub.publish(message_voice);
     //object_pos_pub.publish(object_pos_to_cost_map);
 
     object_counter++;
@@ -602,7 +654,7 @@ void stop_robot_and_wait(int time_wait){
 
 bool check_if_object_is_close(double x,double y){
    double angle_derp = atan2(y,x);
-    if(sqrt(x*x + y*y)<=0.4 && std::fabs(angle_derp)<0.6 ){
+    if(sqrt(x*x + y*y)<=0.5 && std::fabs(angle_derp)<1.0 ){
         return true;
     }else{
         return false;
@@ -650,6 +702,25 @@ void stop_and_classify_object(){
 
 }
 
+void back_robot(int time_wait){
+    geometry_msgs::Twist twist_msg;
+    twist_msg.linear.x = -0.4;
+    twist_msg.angular.z = 0.0;
+    twist_pub.publish(twist_msg);
+    //wait a little bit (1 second right now)
+
+    ros::Rate loop_rate(control_frequency);
+    int counter = 0;
+    while(counter<time_wait)
+    {
+        loop_rate.sleep();
+        counter++;
+        ros::spinOnce();
+    }
+
+
+}
+
 void localization_callback(localization::Position msg)    //meters
 {
     robot_x=msg.x;
@@ -673,17 +744,15 @@ private:
 
  int rows;
  int col; 
- int object_counter;
- int path_node_index;
+ 
+
  
  double beta;
  double xEnd;
  double xStep;
  double angle_to_object;
  double newx, newy;
- double robot_x;
- double robot_y;
- double robot_theta;
+
 };
 
 
@@ -717,6 +786,8 @@ bool setup(ros::NodeHandle nh){
 
 int main(int argc, char **argv)
 {
+
+    fill_bumper_infos();
     int timer = 0;
     bool time_ran_out = false;
     
@@ -733,6 +804,28 @@ int main(int argc, char **argv)
     
     while(brain_node.n.ok())
     {
+        if(brain_node.bumpers_hit_test()){
+
+
+            brain_node.stop_robot_and_wait(30);
+            brain_node.path_node_index = 0;
+            geometry_msgs::PointStamped object_pos_to_cost_map;
+            object_pos_to_cost_map.header.stamp = ros::Time::now();  
+                object_pos_to_cost_map.header.frame_id = brain_node.object_counter;
+                object_pos_to_cost_map.point.x=brain_node.robot_x + 0.2*cos(brain_node.robot_theta);
+                object_pos_to_cost_map.point.y=brain_node.robot_y + 0.2*sin(brain_node.robot_theta);
+                object_pos_to_cost_map.point.z=0;
+
+                brain_node.object_counter++;
+
+            brain_node.back_robot(40);
+            brain_node.object_pos_pub.publish(object_pos_to_cost_map);
+            brain_node.stop_robot_and_wait(60);
+
+        }
+
+
+
         if(!time_ran_out)
         {
             if (flag_has_detected  && brain_node.check_if_object_is_close(closest_object.x,closest_object.y) && brain_node.new_object_detected(closest_object.x,closest_object.y)){
